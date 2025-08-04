@@ -40,7 +40,8 @@ fn empty() -> anyhow::Result<()> {
         )
         .context("starting daemon proc")?;
 
-        env::remove_var("SHPOOL_SESSION_NAME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("SHPOOL_SESSION_NAME") };
 
         let out = daemon_proc.kill(vec![])?;
         assert!(!out.status.success());

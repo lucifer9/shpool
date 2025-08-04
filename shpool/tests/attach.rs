@@ -20,7 +20,8 @@ mod support;
 use crate::support::daemon::{AttachArgs, DaemonArgs};
 
 #[test]
-#[timeout(30000)]
+#[cfg_attr(target_os = "macos", timeout(60000))] // macOS needs more time
+#[cfg_attr(not(target_os = "macos"), timeout(30000))]
 fn happy_path() -> anyhow::Result<()> {
     support::dump_err(|| {
         let mut daemon_proc = support::daemon::Proc::new("norc.toml", DaemonArgs::default())

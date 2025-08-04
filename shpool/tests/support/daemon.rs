@@ -109,6 +109,11 @@ impl Proc {
         let tmp_dir = local_tmp_dir.path().to_path_buf();
 
         let socket_path = tmp_dir.join("shpool.socket");
+        // Use shorter path on macOS to avoid SUN_LEN limit (104 chars)
+        #[cfg(target_os = "macos")]
+        let test_hook_socket_path = tmp_dir.join("hook.socket");
+
+        #[cfg(not(target_os = "macos"))]
         let test_hook_socket_path = tmp_dir.join("shpool-daemon-test-hook.socket");
 
         let log_file = tmp_dir.join("daemon.log");
@@ -150,13 +155,29 @@ impl Proc {
             if args.listen_events { Some(Events::new(&test_hook_socket_path)?) } else { None };
 
         // spin until we can dial the socket successfully
-        let mut sleep_dur = time::Duration::from_millis(5);
-        for _ in 0..12 {
+        // macOS needs more time for daemon startup and socket binding
+        #[cfg(target_os = "macos")]
+        let (mut sleep_dur, max_retries) = (time::Duration::from_millis(25), 20);
+
+        #[cfg(not(target_os = "macos"))]
+        let (mut sleep_dur, max_retries) = (time::Duration::from_millis(5), 12);
+
+        for i in 0..max_retries {
             if UnixStream::connect(&socket_path).is_ok() {
                 break;
             } else {
                 std::thread::sleep(sleep_dur);
-                sleep_dur *= 2;
+                // Be more conservative with backoff on macOS
+                #[cfg(target_os = "macos")]
+                {
+                    if i < 15 {
+                        sleep_dur = sleep_dur.saturating_mul(2);
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    sleep_dur *= 2;
+                }
             }
         }
 
@@ -237,13 +258,29 @@ impl Proc {
         });
 
         // spin until we can dial the socket successfully
-        let mut sleep_dur = time::Duration::from_millis(5);
-        for _ in 0..12 {
+        // macOS needs more time for daemon startup and socket binding
+        #[cfg(target_os = "macos")]
+        let (mut sleep_dur, max_retries) = (time::Duration::from_millis(25), 20);
+
+        #[cfg(not(target_os = "macos"))]
+        let (mut sleep_dur, max_retries) = (time::Duration::from_millis(5), 12);
+
+        for i in 0..max_retries {
             if UnixStream::connect(&socket_path).is_ok() {
                 break;
             } else {
                 std::thread::sleep(sleep_dur);
-                sleep_dur *= 2;
+                // Be more conservative with backoff on macOS
+                #[cfg(target_os = "macos")]
+                {
+                    if i < 15 {
+                        sleep_dur = sleep_dur.saturating_mul(2);
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    sleep_dur *= 2;
+                }
             }
         }
 

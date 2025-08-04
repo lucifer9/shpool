@@ -116,12 +116,15 @@ mod test {
         ];
 
         for (src, err_substring) in cases.into_iter() {
-            if let Err(e) = parse(src) {
-                eprintln!("ERR: {e}");
-                eprintln!("err_substring: {err_substring}");
-                assert!(e.to_string().contains(err_substring));
-            } else {
-                assert_eq!("", "expected err, but got none");
+            match parse(src) {
+                Err(e) => {
+                    eprintln!("ERR: {e}");
+                    eprintln!("err_substring: {err_substring}");
+                    assert!(e.to_string().contains(err_substring));
+                }
+                _ => {
+                    assert_eq!("", "expected err, but got none");
+                }
             }
         }
     }

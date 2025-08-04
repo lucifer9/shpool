@@ -33,6 +33,12 @@ pub fn info() -> anyhow::Result<Info> {
         pw_gecos: ptr::null_mut(),
         pw_dir: ptr::null_mut(),
         pw_shell: ptr::null_mut(),
+        #[cfg(target_os = "macos")]
+        pw_change: 0,
+        #[cfg(target_os = "macos")]
+        pw_class: ptr::null_mut(),
+        #[cfg(target_os = "macos")]
+        pw_expire: 0,
     };
     let mut passwd_res_ptr: *mut libc::passwd = ptr::null_mut();
     unsafe {

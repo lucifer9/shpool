@@ -1,7 +1,7 @@
 [package]
 name = "libshpool"
 version = "0.9.1"
-edition = "2021"
+edition = "2024"
 repository = "https://github.com/shell-pool/shpool"
 authors = ["Ethan Pailes <pailes@google.com>"]
 readme = "README.md"
@@ -13,7 +13,6 @@ disconnects.
 '''
 license = "Apache-2.0"
 keywords = ["tmux", "tty", "terminal", "shell", "persistence"]
-rust-version = "1.74"
 
 [features]
 test_hooks = [] # for internal testing only, don't enable this feature
@@ -24,7 +23,7 @@ anyhow = "1" # dynamic, unstructured errors
 chrono = "0.4" # getting current time and formatting it
 serde = "1" # config parsing, connection header formatting
 serde_derive = "1" # config parsing, connection header formatting
-toml = "0.8" # config parsing
+toml = "0.9" # config parsing
 byteorder = "1" # endianness
 signal-hook = "0.3" # signal handling
 shpool_pty = "0.3.1" # spawning shells in ptys
@@ -40,7 +39,7 @@ motd = { version = "0.2.2", default-features = false, features = [] } # getting 
 termini = "1.0.0" # terminfo database
 tempfile = "3" # RAII tmp files
 strip-ansi-escapes = "0.2.0" # cleaning up strings for pager display
-notify = { version = "7", features = ["crossbeam-channel"] }  # watch config file for updates
+notify = { version = "8", features = ["crossbeam-channel"] }  # watch config file for updates
 libproc = "0.14.8" # sniffing shells by examining the subprocess
 daemonize = "0.5" # autodaemonization
 shpool-protocol = { version = "0.3.0", path = "../shpool-protocol" } # client-server protocol

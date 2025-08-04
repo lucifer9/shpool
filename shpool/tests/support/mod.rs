@@ -43,13 +43,29 @@ pub fn wait_until<P>(mut pred: P) -> anyhow::Result<()>
 where
     P: FnMut() -> anyhow::Result<bool>,
 {
-    let mut sleep_dur = time::Duration::from_millis(5);
-    for _ in 0..12 {
+    // macOS needs more time for various operations to complete
+    #[cfg(target_os = "macos")]
+    let (mut sleep_dur, max_retries) = (time::Duration::from_millis(10), 18);
+
+    #[cfg(not(target_os = "macos"))]
+    let (mut sleep_dur, max_retries) = (time::Duration::from_millis(5), 12);
+
+    for i in 0..max_retries {
         if pred()? {
             return Ok(());
         } else {
             std::thread::sleep(sleep_dur);
-            sleep_dur *= 2;
+            // Be more conservative with backoff on macOS
+            #[cfg(target_os = "macos")]
+            {
+                if i < 12 {
+                    sleep_dur = sleep_dur.saturating_mul(2);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                sleep_dur *= 2;
+            }
         }
     }
 

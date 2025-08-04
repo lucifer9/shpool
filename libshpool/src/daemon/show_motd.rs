@@ -106,12 +106,11 @@ impl DailyMessenger {
             }
         }
 
-        let pager_bin = if let config::MotdDisplayMode::Pager { bin, .. } =
-            self.config.get().motd.clone().unwrap_or_default()
-        {
-            bin
-        } else {
-            return Err(anyhow!("internal error: wrong mode to display in pager"));
+        let pager_bin = match self.config.get().motd.clone().unwrap_or_default() {
+            config::MotdDisplayMode::Pager { bin, .. } => bin,
+            _ => {
+                return Err(anyhow!("internal error: wrong mode to display in pager"));
+            }
         };
 
         info!("displaying motd in pager '{}'", pager_bin);

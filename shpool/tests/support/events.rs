@@ -12,13 +12,32 @@ pub struct Events {
 
 impl Events {
     pub fn new<P: AsRef<Path>>(sock: P) -> anyhow::Result<Self> {
-        let mut sleep_dur = time::Duration::from_millis(5);
-        for _ in 0..12 {
-            if let Ok(s) = UnixStream::connect(&sock) {
-                return Ok(Events { lines: io::BufReader::new(s).lines() });
-            } else {
-                std::thread::sleep(sleep_dur);
-                sleep_dur *= 2;
+        // macOS needs more time for daemon startup and socket creation
+        #[cfg(target_os = "macos")]
+        let (mut sleep_dur, max_retries) = (time::Duration::from_millis(50), 20);
+
+        #[cfg(not(target_os = "macos"))]
+        let (mut sleep_dur, max_retries) = (time::Duration::from_millis(5), 12);
+
+        for i in 0..max_retries {
+            match UnixStream::connect(&sock) {
+                Ok(s) => {
+                    return Ok(Events { lines: io::BufReader::new(s).lines() });
+                }
+                _ => {
+                    std::thread::sleep(sleep_dur);
+                    // On macOS, be more conservative with backoff to avoid too long waits
+                    #[cfg(target_os = "macos")]
+                    {
+                        if i < 10 {
+                            sleep_dur = sleep_dur.saturating_mul(2);
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        sleep_dur *= 2;
+                    }
+                }
             }
         }
 

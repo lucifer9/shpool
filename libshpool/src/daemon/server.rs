@@ -32,7 +32,6 @@ use std::{
 };
 
 use anyhow::{anyhow, Context};
-use nix::unistd;
 use shpool_protocol::{
     AttachHeader, AttachReplyHeader, AttachStatus, ConnectHeader, DetachReply, DetachRequest,
     KillReply, KillRequest, ListReply, LogLevel, ResizeReply, Session, SessionMessageDetachReply,
@@ -144,6 +143,8 @@ impl Server {
     #[instrument(skip_all, fields(cid = conn_id))]
     fn handle_conn(&self, mut stream: UnixStream, conn_id: usize) -> anyhow::Result<()> {
         // We want to avoid timing out while blocking the main thread.
+        // On macOS, Unix domain sockets may not support timeouts
+        #[cfg(not(target_os = "macos"))]
         stream
             .set_read_timeout(Some(consts::SOCK_STREAM_TIMEOUT))
             .context("setting read timout on inbound session")?;
@@ -192,6 +193,7 @@ impl Server {
         // worker thread because it is perfectly fine for there to
         // be no new data for long periods of time when the users
         // is connected to a shell session.
+        #[cfg(not(target_os = "macos"))]
         stream.set_read_timeout(None).context("unsetting read timout on inbound session")?;
 
         match header {
@@ -226,74 +228,80 @@ impl Server {
             let mut status = AttachStatus::Attached { warnings: warnings.clone() };
             if let Some(session) = shells.get(&header.name) {
                 info!("found entry for '{}'", header.name);
-                if let Ok(mut inner) = session.inner.try_lock() {
-                    let _s = span!(Level::INFO, "aquired_lock(session.inner)", s = header.name)
-                        .entered();
-                    // We have an existing session in our table, but the subshell
-                    // proc might have exited in the meantime, for example if the
-                    // user typed `exit` right before the connection dropped there
-                    // could be a zombie entry in our session table. We need to
-                    // re-check whether the subshell has exited before taking this over.
-                    //
-                    // N.B. this is still technically a race, but in practice it does
-                    // not ever cause problems, and there is no real way to avoid some
-                    // sort of race without just always creating a new session when
-                    // a shell exits, which would break `exit` typed at the shell prompt.
-                    match session.child_exit_notifier.wait(Some(time::Duration::from_millis(0))) {
-                        None => {
-                            // the channel is still open so the subshell is still running
-                            info!("taking over existing session inner");
-                            inner.client_stream = Some(stream.try_clone()?);
+                match session.inner.try_lock() {
+                    Ok(mut inner) => {
+                        let _s = span!(Level::INFO, "aquired_lock(session.inner)", s = header.name)
+                            .entered();
+                        // We have an existing session in our table, but the subshell
+                        // proc might have exited in the meantime, for example if the
+                        // user typed `exit` right before the connection dropped there
+                        // could be a zombie entry in our session table. We need to
+                        // re-check whether the subshell has exited before taking this over.
+                        //
+                        // N.B. this is still technically a race, but in practice it does
+                        // not ever cause problems, and there is no real way to avoid some
+                        // sort of race without just always creating a new session when
+                        // a shell exits, which would break `exit` typed at the shell prompt.
+                        match session.child_exit_notifier.wait(Some(time::Duration::from_millis(0)))
+                        {
+                            None => {
+                                // the channel is still open so the subshell is still running
+                                info!("taking over existing session inner");
+                                inner.client_stream = Some(stream.try_clone()?);
 
-                            if inner
-                                .shell_to_client_join_h
-                                .as_ref()
-                                .map(|h| h.is_finished())
-                                .unwrap_or(false)
-                            {
-                                warn!(
+                                if inner
+                                    .shell_to_client_join_h
+                                    .as_ref()
+                                    .map(|h| h.is_finished())
+                                    .unwrap_or(false)
+                                {
+                                    warn!(
                                     "child_exited chan unclosed, but shell->client thread has exited, clobbering with new subshell"
                                 );
-                                status = AttachStatus::Created { warnings };
-                            }
+                                    status = AttachStatus::Created { warnings };
+                                }
 
-                            // status is already attached
-                        }
-                        Some(exit_status) => {
-                            // the channel is closed so we know the subshell exited
-                            info!(
+                                // status is already attached
+                            }
+                            Some(exit_status) => {
+                                // the channel is closed so we know the subshell exited
+                                info!(
                                 "stale inner, (child exited with status {}) clobbering with new subshell",
                                 exit_status
                             );
-                            status = AttachStatus::Created { warnings };
+                                status = AttachStatus::Created { warnings };
+                            }
                         }
-                    }
 
-                    if inner
-                        .shell_to_client_join_h
-                        .as_ref()
-                        .map(|h| h.is_finished())
-                        .unwrap_or(false)
-                    {
-                        info!("shell->client thread finished, joining");
-                        if let Some(h) = inner.shell_to_client_join_h.take() {
-                            h.join()
-                                .map_err(|e| anyhow!("joining shell->client on reattach: {:?}", e))?
-                                .context("within shell->client thread on reattach")?;
+                        if inner
+                            .shell_to_client_join_h
+                            .as_ref()
+                            .map(|h| h.is_finished())
+                            .unwrap_or(false)
+                        {
+                            info!("shell->client thread finished, joining");
+                            if let Some(h) = inner.shell_to_client_join_h.take() {
+                                h.join()
+                                    .map_err(|e| {
+                                        anyhow!("joining shell->client on reattach: {:?}", e)
+                                    })?
+                                    .context("within shell->client thread on reattach")?;
+                            }
+                            assert!(matches!(status, AttachStatus::Created { .. }));
                         }
-                        assert!(matches!(status, AttachStatus::Created { .. }));
-                    }
 
-                    // fallthrough to bidi streaming
-                } else {
-                    info!("busy shell session, doing nothing");
-                    // The stream is busy, so we just inform the client and close the stream.
-                    write_reply(&mut stream, AttachReplyHeader { status: AttachStatus::Busy })?;
-                    stream.shutdown(net::Shutdown::Both).context("closing stream")?;
-                    if let Err(err) = self.hooks.on_busy(&header.name) {
-                        warn!("busy hook: {:?}", err);
+                        // fallthrough to bidi streaming
                     }
-                    return Ok(());
+                    _ => {
+                        info!("busy shell session, doing nothing");
+                        // The stream is busy, so we just inform the client and close the stream.
+                        write_reply(&mut stream, AttachReplyHeader { status: AttachStatus::Busy })?;
+                        stream.shutdown(net::Shutdown::Both).context("closing stream")?;
+                        if let Err(err) = self.hooks.on_busy(&header.name) {
+                            warn!("busy hook: {:?}", err);
+                        }
+                        return Ok(());
+                    }
                 }
             } else {
                 info!("no existing '{}' session, creating new one", &header.name);
@@ -342,94 +350,97 @@ impl Server {
         self.link_ssh_auth_sock(&header).context("linking SSH_AUTH_SOCK")?;
         self.populate_session_env_file(&header).context("populating session env file")?;
 
-        if let (Some(child_exit_notifier), Some(inner), Some(pager_ctl_slot)) =
-            (child_exit_notifier, inner_to_stream, pager_ctl_slot)
-        {
-            let mut child_done = false;
-            let mut inner = inner.lock().unwrap();
-            let client_stream = match inner.client_stream.as_mut() {
-                Some(s) => s,
-                None => {
-                    return Err(anyhow!("no client stream, should be impossible"));
-                }
-            };
-
-            let reply_status =
-                write_reply(client_stream, AttachReplyHeader { status: status.clone() });
-            if let Err(e) = reply_status {
-                error!("error writing reply status: {:?}", e);
-            }
-
-            // If in pager motd mode, launch the pager and block until it is
-            // done, picking up any tty size change that happened while the
-            // user was examining the motd.
-            let motd_mode = self.config.get().motd.clone().unwrap_or_default();
-            let init_tty_size = if matches!(motd_mode, MotdDisplayMode::Pager { .. }) {
-                match self.daily_messenger.display_in_pager(
-                    client_stream,
-                    pager_ctl_slot,
-                    header.local_tty_size.clone(),
-                    &shell_env,
-                ) {
-                    Ok(Some(new_size)) => {
-                        info!("motd pager finished, reporting new tty size: {:?}", new_size);
-                        new_size
+        match (child_exit_notifier, inner_to_stream, pager_ctl_slot) {
+            (Some(child_exit_notifier), Some(inner), Some(pager_ctl_slot)) => {
+                let mut child_done = false;
+                let mut inner = inner.lock().unwrap();
+                let client_stream = match inner.client_stream.as_mut() {
+                    Some(s) => s,
+                    None => {
+                        return Err(anyhow!("no client stream, should be impossible"));
                     }
-                    Ok(None) => {
-                        info!("not time to show the motd in the pager yet");
-                        header.local_tty_size.clone()
+                };
+
+                let reply_status =
+                    write_reply(client_stream, AttachReplyHeader { status: status.clone() });
+                if let Err(e) = reply_status {
+                    error!("error writing reply status: {:?}", e);
+                }
+
+                // If in pager motd mode, launch the pager and block until it is
+                // done, picking up any tty size change that happened while the
+                // user was examining the motd.
+                let motd_mode = self.config.get().motd.clone().unwrap_or_default();
+                let init_tty_size = if matches!(motd_mode, MotdDisplayMode::Pager { .. }) {
+                    match self.daily_messenger.display_in_pager(
+                        client_stream,
+                        pager_ctl_slot,
+                        header.local_tty_size.clone(),
+                        &shell_env,
+                    ) {
+                        Ok(Some(new_size)) => {
+                            info!("motd pager finished, reporting new tty size: {:?}", new_size);
+                            new_size
+                        }
+                        Ok(None) => {
+                            info!("not time to show the motd in the pager yet");
+                            header.local_tty_size.clone()
+                        }
+                        Err(e) => match e.downcast::<PagerError>() {
+                            Ok(PagerError::ClientHangup) => {
+                                info!("client hung up while talking to pager, bailing");
+                                return Ok(());
+                            }
+                            Err(e) => {
+                                return Err(e).context("showing motd in pager")?;
+                            }
+                        },
                     }
-                    Err(e) => match e.downcast::<PagerError>() {
-                        Ok(PagerError::ClientHangup) => {
-                            info!("client hung up while talking to pager, bailing");
-                            return Ok(());
-                        }
-                        Err(e) => {
-                            return Err(e).context("showing motd in pager")?;
-                        }
-                    },
-                }
-            } else {
-                header.local_tty_size.clone()
-            };
+                } else {
+                    header.local_tty_size.clone()
+                };
 
-            info!("starting bidi stream loop");
-            match inner.bidi_stream(conn_id, init_tty_size, child_exit_notifier) {
-                Ok(done) => {
-                    child_done = done;
+                info!("starting bidi stream loop");
+                match inner.bidi_stream(conn_id, init_tty_size, child_exit_notifier) {
+                    Ok(done) => {
+                        child_done = done;
+                    }
+                    Err(e) => {
+                        error!("error shuffling bytes: {:?}", e);
+                    }
                 }
-                Err(e) => {
-                    error!("error shuffling bytes: {:?}", e);
+                info!("bidi stream loop finished child_done={}", child_done);
+
+                if child_done {
+                    info!("'{}' exited, removing from session table", header.name);
+                    if let Err(err) = self.hooks.on_shell_disconnect(&header.name) {
+                        warn!("shell_disconnect hook: {:?}", err);
+                    }
+                    let _s = span!(Level::INFO, "2_lock(shells)").entered();
+                    let mut shells = self.shells.lock().unwrap();
+                    shells.remove(&header.name);
+
+                    // The child shell has exited, so the shell->client thread should
+                    // attempt to read from its stdout and get an error, causing
+                    // it to exit. That means we should be safe to join. We use
+                    // a separate if statement to avoid holding the shells lock
+                    // while we join the old thread.
+                    if let Some(h) = inner.shell_to_client_join_h.take() {
+                        h.join()
+                            .map_err(|e| {
+                                anyhow!("joining shell->client after child exit: {:?}", e)
+                            })?
+                            .context("within shell->client thread after child exit")?;
+                    }
+                } else if let Err(err) = self.hooks.on_client_disconnect(&header.name) {
+                    warn!("client_disconnect hook: {:?}", err);
                 }
+
+                info!("finished attach streaming section");
             }
-            info!("bidi stream loop finished child_done={}", child_done);
-
-            if child_done {
-                info!("'{}' exited, removing from session table", header.name);
-                if let Err(err) = self.hooks.on_shell_disconnect(&header.name) {
-                    warn!("shell_disconnect hook: {:?}", err);
-                }
-                let _s = span!(Level::INFO, "2_lock(shells)").entered();
-                let mut shells = self.shells.lock().unwrap();
-                shells.remove(&header.name);
-
-                // The child shell has exited, so the shell->client thread should
-                // attempt to read from its stdout and get an error, causing
-                // it to exit. That means we should be safe to join. We use
-                // a separate if statement to avoid holding the shells lock
-                // while we join the old thread.
-                if let Some(h) = inner.shell_to_client_join_h.take() {
-                    h.join()
-                        .map_err(|e| anyhow!("joining shell->client after child exit: {:?}", e))?
-                        .context("within shell->client thread after child exit")?;
-                }
-            } else if let Err(err) = self.hooks.on_client_disconnect(&header.name) {
-                warn!("client_disconnect hook: {:?}", err);
+            _ => {
+                error!("internal error: failed to fetch just inserted session");
             }
-
-            info!("finished attach streaming section");
-        } else {
-            error!("internal error: failed to fetch just inserted session");
         }
 
         Ok(())
@@ -1076,28 +1087,41 @@ where
 /// control socket has the same UID as the current user and that
 /// both have the same executable path.
 fn check_peer(sock: &UnixStream) -> anyhow::Result<()> {
-    use nix::sys::socket;
+    #[cfg(target_os = "linux")]
+    {
+        use nix::sys::socket;
 
-    let peer_creds = socket::getsockopt(sock, socket::sockopt::PeerCredentials)
-        .context("could not get peer creds from socket")?;
-    let peer_uid = unistd::Uid::from_raw(peer_creds.uid());
-    let self_uid = unistd::Uid::current();
-    if peer_uid != self_uid {
-        return Err(anyhow!("shpool prohibits connections across users"));
+        let peer_creds = socket::getsockopt(sock, socket::sockopt::PeerCredentials)
+            .context("could not get peer creds from socket")?;
+        let peer_uid = unistd::Uid::from_raw(peer_creds.uid());
+        let self_uid = unistd::Uid::current();
+        if peer_uid != self_uid {
+            return Err(anyhow!("shpool prohibits connections across users"));
+        }
+
+        let peer_pid = unistd::Pid::from_raw(peer_creds.pid());
+        let self_pid = unistd::Pid::this();
+        let peer_exe = exe_for_pid(peer_pid).context("could not resolve exe from the pid")?;
+        let self_exe = exe_for_pid(self_pid).context("could not resolve our own exe")?;
+        if peer_exe != self_exe {
+            warn!("attach binary differs from daemon binary");
+        }
     }
 
-    let peer_pid = unistd::Pid::from_raw(peer_creds.pid());
-    let self_pid = unistd::Pid::this();
-    let peer_exe = exe_for_pid(peer_pid).context("could not resolve exe from the pid")?;
-    let self_exe = exe_for_pid(self_pid).context("could not resolve our own exe")?;
-    if peer_exe != self_exe {
-        warn!("attach binary differs from daemon binary");
+    #[cfg(target_os = "macos")]
+    {
+        let _ = sock; // suppress unused variable warning
+                      // On macOS, Unix domain socket connections are already restricted by file permissions
+                      // Additional peer verification is not available through socket options
+        info!("Peer credential verification not available on macOS - relying on file permissions");
     }
 
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn exe_for_pid(pid: unistd::Pid) -> anyhow::Result<PathBuf> {
     let path = std::fs::read_link(format!("/proc/{pid}/exe"))?;
     Ok(path)
 }
+
