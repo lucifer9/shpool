@@ -32,6 +32,8 @@ use std::{
 };
 
 use anyhow::{anyhow, Context};
+#[cfg(target_os = "linux")]
+use nix::unistd;
 use shpool_protocol::{
     AttachHeader, AttachReplyHeader, AttachStatus, ConnectHeader, DetachReply, DetachRequest,
     KillReply, KillRequest, ListReply, LogLevel, ResizeReply, Session, SessionMessageDetachReply,
@@ -1090,6 +1092,7 @@ fn check_peer(sock: &UnixStream) -> anyhow::Result<()> {
     #[cfg(target_os = "linux")]
     {
         use nix::sys::socket;
+        use nix::unistd;
 
         let peer_creds = socket::getsockopt(sock, socket::sockopt::PeerCredentials)
             .context("could not get peer creds from socket")?;

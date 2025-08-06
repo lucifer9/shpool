@@ -32,6 +32,7 @@ enum KnownShell {
     Fish,
 }
 
+
 /// Inject the given prefix into the given shell subprocess, using
 /// the shell path in `shell` to decide the right way to go about
 /// injecting the prefix.
@@ -60,43 +61,37 @@ pub fn maybe_inject_prefix(
 
     let mut script = match (prompt_prefix.as_str(), shell_type) {
         (_, Ok(KnownShell::Bash)) => format!(
-            r#"
-            if [[ -z "${{PROMPT_COMMAND+x}}" ]]; then
-               PS1="{prompt_prefix}${{PS1}}"
-            else
-               SHPOOL__OLD_PROMPT_COMMAND=("${{PROMPT_COMMAND[@]}}")
-               SHPOOL__OLD_PS1="${{PS1}}"
-               function __shpool__prompt_command() {{
-                  PS1="${{SHPOOL__OLD_PS1}}"
-                  for prompt_hook in "${{SHPOOL__OLD_PROMPT_COMMAND[@]}}"
-                  do
-                    eval "${{prompt_hook}}"
-                  done
-                  PS1="{prompt_prefix}${{PS1}}"
-               }}
-               PROMPT_COMMAND=__shpool__prompt_command
-            fi
-        "#
+            "if [[ -z \"${{PROMPT_COMMAND+x}}\" ]]; then\n\
+               PS1=\"{prompt_prefix}${{PS1}}\"\n\
+            else\n\
+               SHPOOL__OLD_PROMPT_COMMAND=(\"${{PROMPT_COMMAND[@]}}\")\n\
+               SHPOOL__OLD_PS1=\"${{PS1}}\"\n\
+               function __shpool__prompt_command() {{\n\
+                  PS1=\"${{SHPOOL__OLD_PS1}}\"\n\
+                  for prompt_hook in \"${{SHPOOL__OLD_PROMPT_COMMAND[@]}}\"\n\
+                  do\n\
+                    eval \"${{prompt_hook}}\"\n\
+                  done\n\
+                  PS1=\"{prompt_prefix}${{PS1}}\"\n\
+               }}\n\
+               PROMPT_COMMAND=__shpool__prompt_command\n\
+            fi\n"
         ),
         (_, Ok(KnownShell::Zsh)) => format!(
-            r#"
-            typeset -a precmd_functions
-            SHPOOL__OLD_PROMPT="${{PROMPT}}"
-            function __shpool__reset_rprompt() {{
-                PROMPT="${{SHPOOL__OLD_PROMPT}}"
-            }}
-            precmd_functions[1,0]=(__shpool__reset_rprompt)
-            function __shpool__prompt_command() {{
-               PROMPT="{prompt_prefix}${{PROMPT}}"
-            }}
-            precmd_functions+=(__shpool__prompt_command)
-        "#
+            "typeset -a precmd_functions\n\
+            SHPOOL__OLD_PROMPT=\"${{PROMPT}}\"\n\
+            function __shpool__reset_rprompt() {{\n\
+                PROMPT=\"${{SHPOOL__OLD_PROMPT}}\"\n\
+            }}\n\
+            precmd_functions[1,0]=(__shpool__reset_rprompt)\n\
+            function __shpool__prompt_command() {{\n\
+               PROMPT=\"{prompt_prefix}${{PROMPT}}\"\n\
+            }}\n\
+            precmd_functions+=(__shpool__prompt_command)\n"
         ),
         (_, Ok(KnownShell::Fish)) => format!(
-            r#"
-            functions --copy fish_prompt shpool__old_prompt
-            function fish_prompt; echo -n "{prompt_prefix}"; shpool__old_prompt; end
-        "#
+            "functions --copy fish_prompt shpool__old_prompt\n\
+            function fish_prompt; echo -n \"{prompt_prefix}\"; shpool__old_prompt; end\n"
         ),
         (_, Err(e)) => {
             warn!("could not sniff shell: {}", e);
@@ -117,7 +112,7 @@ pub fn maybe_inject_prefix(
         .to_string_lossy()
         .to_string();
     let sentinel_cmd =
-        format!("\n {}=prompt {} daemon\n", SENTINEL_FLAG_VAR, current_exe);
+        format!("\n {SENTINEL_FLAG_VAR}=prompt {current_exe} daemon\n");
     script.push_str(sentinel_cmd.as_str());
 
     debug!("injecting prefix script '{}'", script);
@@ -135,7 +130,7 @@ fn wait_for_startup(pty_master: &mut shpool_pty::fork::Master) -> anyhow::Result
         .to_string_lossy()
         .to_string();
     let startup_sentinel_cmd =
-        format!("\n {}=startup {} daemon\n", SENTINEL_FLAG_VAR, current_exe);
+        format!("\n {SENTINEL_FLAG_VAR}=startup {current_exe} daemon\n");
 
     pty_master
         .write_all(startup_sentinel_cmd.as_bytes())
@@ -215,3 +210,4 @@ impl SentinelScanner {
         }
     }
 }
+

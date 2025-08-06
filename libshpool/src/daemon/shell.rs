@@ -408,6 +408,7 @@ impl SessionInner {
                 if do_reattach {
                     info!("executing reattach protocol (mode={:?})", &args.session_restore_mode);
                     let restore_buf = output_spool.restore_buffer();
+                    info!("restore buffer length: {} bytes", restore_buf.len());
                     if let (true, ClientConnectionMsg::New(conn)) =
                         (!restore_buf.is_empty(), &mut client_conn)
                     {
@@ -678,12 +679,49 @@ impl SessionInner {
 
         let c_done = child_done.load(Ordering::Acquire);
         if c_done {
-            client_stream
-                .shutdown(std::net::Shutdown::Both)
-                .context("shutting down client stream")?;
+            // Ignore shutdown errors - the client may have already disconnected
+            if let Err(e) = client_stream.shutdown(std::net::Shutdown::Both) {
+                debug!("client stream shutdown error (ignoring): {}", e);
+            }
         }
 
-        info!("done child_done={}", c_done);
+        info!("bidi_stream exiting: child_done={}", c_done);
+        
+        // If child_done is false but we're exiting, check if the child has actually exited
+        // This handles the race condition where client disconnects before child exit is detected
+        if !c_done {
+            // macOS may need more time for process cleanup and signal propagation
+            #[cfg(target_os = "macos")]
+            let wait_time = Duration::from_millis(500);
+            #[cfg(not(target_os = "macos"))]
+            let wait_time = Duration::from_millis(200);
+            
+            info!("checking for delayed child exit detection (waiting {}ms)", wait_time.as_millis());
+            if let Some(exit_status) = child_exit_notifier.wait(Some(wait_time)) {
+                info!("detected child exit after bidi_stream loop: status={}", exit_status);
+                return Ok(true);
+            } else {
+                // As a last resort, check if the process is still alive using kill(pid, 0)
+                if let Some(child_pid) = self.pty_master.child_pid() {
+                    use nix::sys::signal;
+                    use nix::unistd::Pid;
+                    match signal::kill(Pid::from_raw(child_pid), None) {
+                        Ok(_) => {
+                            info!("child process {} is still alive after client disconnect", child_pid);
+                        }
+                        Err(nix::errno::Errno::ESRCH) => {
+                            info!("child process {} not found - assuming it has exited", child_pid);
+                            return Ok(true);
+                        }
+                        Err(e) => {
+                            warn!("error checking if child process {} exists: {}", child_pid, e);
+                        }
+                    }
+                }
+                info!("no child exit detected after waiting");
+            }
+        }
+        
         Ok(c_done)
     }
 

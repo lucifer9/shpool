@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Service identification -->
+    <key>Label</key>
+    <string>com.github.lucifer9.shpool</string>
+    
+    <!-- Program to run -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/shpool</string>
+        <string>daemon</string>
+    </array>
+    
+    <!-- Service description -->
+    <key>ServiceDescription</key>
+    <string>Shpool - Shell Session Pool Daemon</string>
+    
+    <!-- Run the service automatically when loaded -->
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <!-- Keep the service running (restart if it exits) -->
+    <key>KeepAlive</key>
+    <true/>
+    
+    <!-- Socket activation (similar to systemd socket activation) -->
+    <key>Sockets</key>
+    <dict>
+        <key>Listeners</key>
+        <dict>
+            <key>SockFamily</key>
+            <string>Unix</string>
+            <key>SockPathName</key>
+            <string>~/.local/run/shpool/shpool.socket</string>
+            <key>SockPathMode</key>
+            <integer>384</integer> <!-- 0600 in decimal -->
+        </dict>
+    </dict>
+    
+    <!-- Set appropriate working directory -->
+    <key>WorkingDirectory</key>
+    <string>~</string>
+    
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    
+    <!-- Logging configuration -->
+    <key>StandardOutPath</key>
+    <string>~/.local/run/shpool/shpool.log</string>
+    <key>StandardErrorPath</key>
+    <string>~/.local/run/shpool/shpool.error.log</string>
+    
+    <!-- Process management -->
+    <key>TimeOut</key>
+    <integer>2</integer>
+    
+    <!-- Run as user service (not system-wide) -->
+    <key>LimitLoadToSessionType</key>
+    <array>
+        <string>Aqua</string>
+    </array>
+    
+    <!-- Throttle job if it's respawning too quickly -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

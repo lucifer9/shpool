@@ -84,11 +84,24 @@ impl SessionSpool for Vt100Screen {
 
     fn restore_buffer(&self) -> Vec<u8> {
         let (rows, cols) = self.parser.screen().size();
-        info!("computing screen restore buf with (rows={}, cols={})", rows, cols);
-        self.parser.screen().contents_formatted()
+        let restore_buf = self.parser.screen().contents_formatted();
+        info!("computing screen restore buf with (rows={}, cols={}, buf_len={})", 
+              rows, cols, restore_buf.len());
+        if restore_buf.is_empty() {
+            info!("restore buffer is empty - no content to restore");
+        } else {
+            info!("restore buffer content preview: {:?}", 
+                  String::from_utf8_lossy(&restore_buf[..std::cmp::min(100, restore_buf.len())]));
+        }
+        restore_buf
     }
 
     fn process(&mut self, bytes: &[u8]) {
+        if !bytes.is_empty() {
+            info!("Vt100Screen processing {} bytes: {:?}", 
+                  bytes.len(), 
+                  String::from_utf8_lossy(&bytes[..std::cmp::min(50, bytes.len())]));
+        }
         self.parser.process(bytes)
     }
 }
@@ -109,11 +122,24 @@ impl SessionSpool for Vt100Lines {
 
     fn restore_buffer(&self) -> Vec<u8> {
         let (rows, cols) = self.parser.screen().size();
-        info!("computing lines({}) restore buf with (rows={}, cols={})", self.nlines, rows, cols);
-        self.parser.screen().last_n_rows_contents_formatted(self.nlines)
+        let restore_buf = self.parser.screen().last_n_rows_contents_formatted(self.nlines);
+        info!("computing lines({}) restore buf with (rows={}, cols={}, buf_len={})", 
+              self.nlines, rows, cols, restore_buf.len());
+        if restore_buf.is_empty() {
+            info!("restore buffer is empty - no content to restore");
+        } else {
+            info!("restore buffer content preview: {:?}", 
+                  String::from_utf8_lossy(&restore_buf[..std::cmp::min(100, restore_buf.len())]));
+        }
+        restore_buf
     }
 
     fn process(&mut self, bytes: &[u8]) {
+        if !bytes.is_empty() {
+            info!("Vt100Lines processing {} bytes: {:?}", 
+                  bytes.len(), 
+                  String::from_utf8_lossy(&bytes[..std::cmp::min(50, bytes.len())]));
+        }
         self.parser.process(bytes)
     }
 }

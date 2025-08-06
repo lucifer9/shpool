@@ -83,6 +83,34 @@ SHPOOL_LEAVE_TEST_LOGS=true cargo test --test attach happy_path -- --nocapture
 - Shell detection and automatic prompt prefixing
 - TTY management for proper signal handling
 
+## Service Management
+
+### systemd (Linux)
+```bash
+# Install service files
+sudo cp systemd/shpool.service /etc/systemd/system/
+sudo cp systemd/shpool.socket /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable shpool.socket
+sudo systemctl start shpool.socket
+```
+
+### launchd (macOS)
+```bash
+# Automatic installation
+cd launchd && ./install-macos.sh
+
+# Manual installation
+cp launchd/com.github.lucifer9.shpool.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.github.lucifer9.shpool.plist
+
+# Check status
+launchctl list | grep shpool
+
+# View logs
+tail -f ~/.local/run/shpool/daemonized-shpool.log
+```
+
 ## Testing
 
 ### Test Structure

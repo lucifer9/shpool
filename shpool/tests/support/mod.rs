@@ -65,6 +65,7 @@ where
             #[cfg(not(target_os = "macos"))]
             {
                 sleep_dur *= 2;
+                let _ = i; // Suppress unused variable warning on non-macOS
             }
         }
     }

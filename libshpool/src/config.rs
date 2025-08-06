@@ -20,6 +20,9 @@ use std::{
     sync::{Arc, RwLock, RwLockReadGuard},
 };
 
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+use std::env;
+
 use anyhow::{Context as _, Result};
 use serde_derive::Deserialize;
 use tracing::{info, warn};
@@ -148,8 +151,7 @@ impl Manager {
     fn config_base_dir() -> anyhow::Result<PathBuf> {
         let user_info = user::info().context("getting user info")?;
         let mut path = PathBuf::from(user_info.home_dir);
-        path.push("Library");
-        path.push("Application Support");
+        path.push(".config");
         Ok(path)
     }
 
