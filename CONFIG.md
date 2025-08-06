@@ -149,3 +149,36 @@ pager program. The pager must accept a file name to display as its first argumen
 on to the actual terminal session. Pager mode is more disruptive than
 dump mode, but it allows shpool to show you the motd even if you have a single
 long running session you keep around for months and continually reattach to.
+
+## Command Aliases
+
+`shpool` supports command aliases to create shortcuts for commonly used commands.
+You can define aliases in your config file using a simple mapping syntax:
+
+```toml
+[aliases]
+dt = "detach"
+at = "attach" 
+sw = "switch"
+ls = "list"
+```
+
+With these aliases configured, you can use the short forms instead of the full commands:
+
+- `shpool dt session1` instead of `shpool detach session1`
+- `shpool at session1` instead of `shpool attach session1`
+- `shpool sw session2` instead of `shpool switch session2`
+- `shpool ls` instead of `shpool list`
+
+### Alias Features
+
+- **Dynamic Reloading**: Aliases are reloaded automatically when you modify your config file, no need to restart the daemon
+- **Full Argument Support**: All arguments and flags work with aliases - `shpool at -f session1` becomes `shpool attach -f session1`
+- **Configuration Merging**: Aliases defined in system-level config can be overridden by user-level config
+- **Error Handling**: Invalid alias configurations will be ignored and won't prevent shpool from working
+
+### Alias Naming
+
+- Alias names can contain letters, numbers, and common symbols
+- Avoid using existing command names as aliases (e.g., don't alias "list" to something else)
+- Keep aliases short and memorable for the best user experience

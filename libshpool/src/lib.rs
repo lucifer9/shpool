@@ -29,7 +29,7 @@ use tracing_subscriber::{fmt::format::FmtSpan, prelude::*};
 
 mod attach;
 mod common;
-mod config;
+pub mod config;
 mod config_watcher;
 mod consts;
 mod daemon;
@@ -298,6 +298,7 @@ impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for LogWriterBuilder 
         }
     }
 }
+
 
 /// Run the shpool tool with the given arguments. If hooks is provided,
 /// inject the callbacks into the daemon.

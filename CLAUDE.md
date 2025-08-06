@@ -125,6 +125,25 @@ SHPOOL_LEAVE_TEST_LOGS=true rr ./path/to/test/exe <test_name> --nocapture
 rr replay --debugger=rust-gdb --onprocess=<PID>
 ```
 
+## Features
+
+### Command Aliases
+Shpool supports command aliases for creating shortcuts to commonly used commands. Configure in `config.toml`:
+
+```toml
+[aliases]
+dt = "detach"
+at = "attach"  
+sw = "switch"
+ls = "list"
+```
+
+Usage: `shpool dt session1` → `shpool detach session1`
+
+- Supports all command arguments and flags
+- Dynamic reloading when config changes
+- No daemon restart required
+
 ## Development Notes
 
 - Minimum Rust version: 1.74.0

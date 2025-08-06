@@ -284,6 +284,14 @@ pub struct Config {
     /// See https://man7.org/linux/man-pages/man8/pam_motd.8.html
     /// for more info.
     pub motd_args: Option<Vec<String>>,
+
+    /// Command aliases mapping short names to full command names.
+    /// For example: "dt" -> "detach", "at" -> "attach"
+    /// This allows users to define shortcuts like:
+    /// [aliases]
+    /// dt = "detach"
+    /// at = "attach"
+    pub aliases: Option<HashMap<String, String>>,
 }
 
 impl Config {
@@ -316,6 +324,7 @@ impl Config {
             prompt_prefix: self.prompt_prefix.or(another.prompt_prefix),
             motd: self.motd.or(another.motd),
             motd_args: self.motd_args.or(another.motd_args),
+            aliases: self.aliases.or(another.aliases),
         }
     }
 }
@@ -409,6 +418,12 @@ mod test {
             binding = "Ctrl-q a"
             action = "detach"
             "#,
+            r#"
+            [aliases]
+            dt = "detach"
+            at = "attach"
+            ls = "list"
+            "#,
         ];
 
         for case in cases.into_iter() {
@@ -500,5 +515,58 @@ mod test {
             );
             Ok(())
         }
+
+        #[test]
+        #[timeout(30000)]
+        fn aliases_value() -> Result<()> {
+            let higher = Config {
+                aliases: Some(HashMap::from([
+                    ("dt".to_string(), "detach".to_string()),
+                    ("at".to_string(), "attach".to_string()),
+                ])),
+                ..Default::default()
+            };
+            let lower = Config {
+                aliases: Some(HashMap::from([
+                    ("ls".to_string(), "list".to_string()),
+                    ("sw".to_string(), "switch".to_string()),
+                ])),
+                ..Default::default()
+            };
+
+            let actual = higher.merge(lower);
+
+            assert_eq!(
+                actual.aliases,
+                Some(HashMap::from([
+                    ("dt".to_string(), "detach".to_string()),
+                    ("at".to_string(), "attach".to_string()),
+                ]))
+            );
+            Ok(())
+        }
+    }
+
+    #[test]
+    #[timeout(30000)]
+    fn alias_parsing() -> Result<()> {
+        let config_str = r#"
+            [aliases]
+            dt = "detach"
+            at = "attach"
+            sw = "switch"
+            ls = "list"
+        "#;
+
+        let config: Config = toml::from_str(config_str)?;
+        
+        let aliases = config.aliases.unwrap();
+        assert_eq!(aliases.get("dt"), Some(&"detach".to_string()));
+        assert_eq!(aliases.get("at"), Some(&"attach".to_string()));
+        assert_eq!(aliases.get("sw"), Some(&"switch".to_string()));
+        assert_eq!(aliases.get("ls"), Some(&"list".to_string()));
+        assert_eq!(aliases.get("nonexistent"), None);
+
+        Ok(())
     }
 }
