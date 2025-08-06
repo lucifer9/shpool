@@ -42,6 +42,7 @@ mod list;
 mod protocol;
 mod session_restore;
 mod set_log_level;
+mod switch;
 mod test_hooks;
 mod tty;
 mod user;
@@ -152,6 +153,47 @@ pass to the binary using the shell-words crate."
         )]
         cmd: Option<String>,
         #[clap(help = "The name of the shell session to create or attach to")]
+        name: String,
+    },
+
+    #[clap(about = "Switch from the current session to another session
+    
+This command detaches from the current session (if any) and then attaches
+to the target session. This avoids session nesting and provides a clean
+session switching experience.")]
+    #[non_exhaustive]
+    Switch {
+        #[clap(short, long, help = "If the target session already has a terminal attached, detach it first")]
+        force: bool,
+        #[clap(
+            long,
+            help = "Ask for confirmation before switching sessions"
+        )]
+        confirm: bool,
+        #[clap(
+            long,
+            long_help = "Automatically kill the session after the given time
+
+This option only applies when first creating a session, it is ignored when
+switching to an existing session.
+
+The duration can be specified either in a colon seperated format
+of the form dd:hh:mm:ss where any prefix may be left off (i.e. '01:00:30:00'
+for 1 day and 30 minutes or '10:45:00' for 10 hours and 45 minutes), or
+using a number with a trailing letter to indicate time unit
+(i.e. '3d', '19h', or '5s')."
+        )]
+        ttl: Option<String>,
+        #[clap(
+            short,
+            long,
+            long_help = "A command to run instead of the user's default shell
+
+The command is broken up into a binary to invoke and a list of arguments to
+pass to the binary using the shell-words crate."
+        )]
+        cmd: Option<String>,
+        #[clap(help = "The name of the shell session to switch to")]
         name: String,
     },
 
@@ -359,6 +401,9 @@ pub fn run(args: Args, hooks: Option<Box<dyn hooks::Hooks + Send + Sync>>) -> an
         ),
         Commands::Attach { force, ttl, cmd, name } => {
             attach::run(config_manager, name, force, ttl, cmd, socket)
+        }
+        Commands::Switch { force, confirm, ttl, cmd, name } => {
+            switch::run(config_manager, name, force, confirm, ttl, cmd, socket)
         }
         Commands::Detach { sessions } => detach::run(sessions, socket),
         Commands::Kill { sessions } => kill::run(sessions, socket),
