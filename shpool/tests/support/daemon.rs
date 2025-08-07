@@ -357,49 +357,6 @@ impl Proc {
         Ok(attach::Proc { proc, log_file, events: Some(events) })
     }
 
-    pub fn switch(&mut self, name: &str, args: AttachArgs) -> anyhow::Result<attach::Proc> {
-        let log_file = self.tmp_dir.join(format!("switch_{}_{}.log", name, self.subproc_counter));
-        let test_hook_socket_path =
-            self.tmp_dir.join(format!("switch_test_hook_{}_{}.socket", name, self.subproc_counter));
-        eprintln!("spawning switch proc with log {:?}", &log_file);
-        self.subproc_counter += 1;
-
-        let mut cmd = Command::new(shpool_bin()?);
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::piped());
-        if let Some(config_file) = args.config {
-            cmd.arg("--config-file").arg(testdata_file(config_file));
-        }
-        cmd.arg("-v")
-            .arg("--log-file")
-            .arg(&log_file)
-            .arg("--socket")
-            .arg(&self.socket_path)
-            .arg("--no-daemonize")
-            .env_clear()
-            .env("SHPOOL_TEST_HOOK_SOCKET_PATH", &test_hook_socket_path)
-            .envs(args.extra_env)
-            .arg("switch");
-        if let Ok(xdg_runtime_dir) = env::var("XDG_RUNTIME_DIR") {
-            cmd.env("XDG_RUNTIME_DIR", xdg_runtime_dir);
-        }
-        if args.force {
-            cmd.arg("-f");
-        }
-        if let Some(ttl) = args.ttl {
-            cmd.arg("--ttl");
-            cmd.arg(format!("{}s", ttl.as_secs()));
-        }
-        if let Some(cmd_str) = &args.cmd {
-            cmd.arg("-c");
-            cmd.arg(cmd_str);
-        }
-        let proc = cmd.arg(name).spawn().context(format!("spawning switch proc for {name}"))?;
-
-        let events = Events::new(&test_hook_socket_path)?;
-
-        Ok(attach::Proc { proc, log_file, events: Some(events) })
-    }
-
     pub fn detach(&mut self, sessions: Vec<String>) -> anyhow::Result<process::Output> {
         let log_file = self.tmp_dir.join(format!("detach_{}.log", self.subproc_counter));
         eprintln!("spawning detach proc with log {:?}", &log_file);
