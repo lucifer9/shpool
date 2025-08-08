@@ -37,6 +37,12 @@ pub fn run(
     info!("\n\n======================== STARTING ATTACH ============================\n\n");
     test_hooks::emit("attach-startup");
 
+    // Check if we're already in a shpool session (nested attach not allowed)
+    if let Ok(_session_name) = env::var("SHPOOL_SESSION_NAME") {
+        eprintln!("\nNested sessions are not allowed.\n");
+        std::process::exit(1);
+    }
+
     if name.is_empty() {
         eprintln!("blank session names are not allowed");
         return Ok(());

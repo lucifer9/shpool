@@ -151,3 +151,4 @@ Usage: `shpool dt session1` → `shpool detach session1`
 - Release managed by release-plz
 - Semver versioning with libshpool/shpool in lockstep
 - MSRV targets Debian stable rust version
+- Use ABSOLUTE PATH when creating test script
