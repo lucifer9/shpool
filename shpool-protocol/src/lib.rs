@@ -213,6 +213,10 @@ pub struct AttachHeader {
     /// If specified, a command to run instead of the users default shell.
     #[serde(default)]
     pub cmd: Option<String>,
+    /// The working directory to start the shell session in.
+    /// If not specified, the daemon will use the user's home directory.
+    #[serde(default)]
+    pub working_directory: Option<String>,
 }
 
 impl AttachHeader {

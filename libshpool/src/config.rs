@@ -292,6 +292,13 @@ pub struct Config {
     /// dt = "detach"
     /// at = "attach"
     pub aliases: Option<HashMap<String, String>>,
+
+    /// The default directory to start new shell sessions in.
+    /// If not specified, new sessions will start in the current
+    /// working directory of the `shpool attach` command.
+    /// This can be overridden on a per-session basis using the
+    /// --dir command line flag.
+    pub start_directory: Option<String>,
 }
 
 impl Config {
@@ -325,6 +332,7 @@ impl Config {
             motd: self.motd.or(another.motd),
             motd_args: self.motd_args.or(another.motd_args),
             aliases: self.aliases.or(another.aliases),
+            start_directory: self.start_directory.or(another.start_directory),
         }
     }
 }

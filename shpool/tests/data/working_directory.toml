@@ -1,0 +1,7 @@
+start_directory = "/tmp/test-working-dir"
+
+prompt_prefix = "[$HOST $SHPOOL_SESSION_NAME]"
+
+[[keybinding]]
+binding = "Ctrl-b d"
+action = "detach"

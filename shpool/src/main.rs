@@ -111,11 +111,11 @@ fn main() -> anyhow::Result<()> {
                 use clap::error::ErrorKind;
                 match e.kind() {
                     ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
-                        print!("{}", e);
+                        print!("{e}");
                         std::process::exit(0);
                     }
                     _ => {
-                        eprint!("{}", e);
+                        eprint!("{e}");
                         std::process::exit(2);
                     }
                 }

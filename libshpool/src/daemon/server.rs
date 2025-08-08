@@ -734,7 +734,12 @@ impl Server {
             cmd
         };
 
-        cmd.current_dir(user_info.home_dir.clone())
+        // Use the working directory from the header, fallback to home directory
+        let working_dir = header.working_directory
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(&user_info.home_dir));
+        cmd.current_dir(working_dir)
             .stdin(process::Stdio::inherit())
             .stdout(process::Stdio::inherit())
             .stderr(process::Stdio::inherit())

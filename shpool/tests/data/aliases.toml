@@ -1,0 +1,11 @@
+prompt_prefix = "[$HOST $SHPOOL_SESSION_NAME]"
+
+[aliases]
+dt = "detach"
+at = "attach"
+ls = "list"
+sw = "switch"
+
+[[keybinding]]
+binding = "Ctrl-b d"
+action = "detach"

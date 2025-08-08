@@ -26,12 +26,44 @@ use super::{config, duration, protocol, protocol::ClientResult, test_hooks, tty:
 
 const MAX_FORCE_RETRIES: usize = 20;
 
+/// Resolve the working directory for the new shell session based on priority:
+/// 1. Command line --dir parameter (highest priority)
+/// 2. Config file start_directory setting
+/// 3. Current working directory (new default behavior)
+/// 4. Home directory (fallback)
+fn resolve_working_directory(
+    cmd_dir: Option<&str>,
+    config_directory: Option<&str>,
+) -> anyhow::Result<PathBuf> {
+    use super::user;
+    
+    // 1. Command line parameter has highest priority
+    if let Some(dir) = cmd_dir {
+        return Ok(PathBuf::from(dir));
+    }
+    
+    // 2. Config file setting
+    if let Some(dir) = config_directory {
+        return Ok(PathBuf::from(dir));
+    }
+    
+    // 3. Current working directory (new default behavior)
+    if let Ok(current_dir) = env::current_dir() {
+        return Ok(current_dir);
+    }
+    
+    // 4. Home directory as fallback
+    let user_info = user::info().context("getting user info")?;
+    Ok(PathBuf::from(user_info.home_dir))
+}
+
 pub fn run(
     config_manager: config::Manager,
     name: String,
     force: bool,
     ttl: Option<String>,
     cmd: Option<String>,
+    dir: Option<String>,
     socket: PathBuf,
 ) -> anyhow::Result<()> {
     info!("\n\n======================== STARTING ATTACH ============================\n\n");
@@ -66,7 +98,7 @@ pub fn run(
 
     let mut detached = false;
     let mut tries = 0;
-    while let Err(err) = do_attach(&config_manager, name.as_str(), &ttl, &cmd, &socket) {
+    while let Err(err) = do_attach(&config_manager, name.as_str(), &ttl, &cmd, &dir, &socket) {
         match err.downcast() {
             Ok(BusyError) if !force => {
                 eprintln!("session '{name}' already has a terminal attached");
@@ -116,6 +148,7 @@ fn do_attach(
     name: &str,
     ttl: &Option<time::Duration>,
     cmd: &Option<String>,
+    dir: &Option<String>,
     socket: &PathBuf,
 ) -> anyhow::Result<()> {
     let mut client = dial_client(socket)?;
@@ -136,6 +169,12 @@ fn do_attach(
         }
     }
 
+    // Resolve the working directory based on priority
+    let config_binding = config.get();
+    let config_start_dir = config_binding.start_directory.as_deref();
+    let working_directory = resolve_working_directory(dir.as_deref(), config_start_dir)
+        .context("resolving working directory")?;
+
     client
         .write_connect_header(ConnectHeader::Attach(AttachHeader {
             name: String::from(name),
@@ -149,6 +188,7 @@ fn do_attach(
                 .collect::<Vec<_>>(),
             ttl_secs: ttl.map(|d| d.as_secs()),
             cmd: cmd.clone(),
+            working_directory: Some(working_directory.to_string_lossy().to_string()),
         }))
         .context("writing attach header")?;
 

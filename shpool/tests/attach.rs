@@ -1704,3 +1704,266 @@ fn up_arrow_no_crash() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+#[timeout(30000)]
+fn nested_session_blocked() -> anyhow::Result<()> {
+    support::dump_err(|| {
+        let mut daemon_proc = support::daemon::Proc::new(
+            "norc.toml",
+            DaemonArgs { listen_events: false, ..DaemonArgs::default() },
+        )
+        .context("starting daemon proc")?;
+
+        // Test that nested session attach is blocked when SHPOOL_SESSION_NAME is set
+        let mut attach_proc = daemon_proc
+            .attach(
+                "nested-test", 
+                AttachArgs {
+                    extra_env: vec![(String::from("SHPOOL_SESSION_NAME"), String::from("parent-session"))],
+                    ..Default::default()
+                }
+            )
+            .context("trying to attach with SHPOOL_SESSION_NAME set")?;
+        
+        let mut stderr_line_matcher = attach_proc.stderr_line_matcher()?;
+        stderr_line_matcher.scan_until_re("Nested sessions are not allowed")?;
+
+        // Verify the process exits with error code 1
+        let exit_status = attach_proc.proc.wait()?;
+        assert_eq!(exit_status.code(), Some(1));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[timeout(30000)]
+fn nested_session_alias_blocked() -> anyhow::Result<()> {
+    support::dump_err(|| {
+        let daemon_proc = support::daemon::Proc::new(
+            "aliases.toml",
+            DaemonArgs { listen_events: false, ..DaemonArgs::default() },
+        )
+        .context("starting daemon proc")?;
+
+        // Test that alias commands (like "at" for "attach") are also blocked
+        let out = Command::new(support::shpool_bin()?)
+            .arg("--config-file")
+            .arg(support::testdata_file("aliases.toml"))
+            .arg("--socket")
+            .arg(&daemon_proc.socket_path)
+            .arg("--no-daemonize")
+            .arg("at")  // This is an alias for "attach"
+            .arg("alias-test-session")
+            .env("SHPOOL_SESSION_NAME", "parent-session")
+            .output()
+            .context("running alias command with SHPOOL_SESSION_NAME set")?;
+
+        assert!(!out.status.success(), "alias attach should fail when nested");
+        assert_eq!(out.status.code(), Some(1));
+        
+        let stderr = String::from_utf8_lossy(&out.stderr[..]);
+        assert!(stderr.contains("Nested sessions are not allowed"));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[timeout(30000)]
+fn working_directory_cli_param() -> anyhow::Result<()> {
+    support::dump_err(|| {
+        let mut daemon_proc = support::daemon::Proc::new("norc.toml", DaemonArgs::default())
+            .context("starting daemon proc")?;
+
+        // Create test directory
+        let test_dir = "/tmp/cli-test-dir";
+        std::fs::create_dir_all(test_dir)?;
+
+        let waiter = daemon_proc.events.take().unwrap().waiter(["daemon-bidi-stream-enter"]);
+        let mut attach_proc = daemon_proc.attach(
+            "test_cli_dir", 
+            AttachArgs {
+                dir: Some(test_dir.to_string()),
+                ..Default::default()
+            }
+        ).context("starting attach proc")?;
+
+        daemon_proc.events = Some(waiter.wait_final_event("daemon-bidi-stream-enter")?);
+
+        let mut lm = attach_proc.line_matcher()?;
+        attach_proc.run_cmd("pwd")?;
+        lm.scan_until_re(&format!("{}$", regex::escape(test_dir)))?;
+
+        // Clean up
+        std::fs::remove_dir_all(test_dir).ok();
+
+        Ok(())
+    })
+}
+
+#[test] 
+#[timeout(30000)]
+fn working_directory_config() -> anyhow::Result<()> {
+    support::dump_err(|| {
+        let mut daemon_proc = support::daemon::Proc::new("working_directory.toml", DaemonArgs::default())
+            .context("starting daemon proc")?;
+
+        // Create test directory
+        let test_dir = "/tmp/test-working-dir";
+        std::fs::create_dir_all(test_dir)?;
+
+        let waiter = daemon_proc.events.take().unwrap().waiter(["daemon-bidi-stream-enter"]);
+        let mut attach_proc = daemon_proc.attach("test_config_dir", Default::default())
+            .context("starting attach proc")?;
+
+        daemon_proc.events = Some(waiter.wait_final_event("daemon-bidi-stream-enter")?);
+
+        let mut lm = attach_proc.line_matcher()?;
+        attach_proc.run_cmd("pwd")?;
+        lm.scan_until_re(&format!("{}$", regex::escape(test_dir)))?;
+
+        // Clean up
+        std::fs::remove_dir_all(test_dir).ok();
+
+        Ok(())
+    })
+}
+
+#[test]
+#[timeout(30000)] 
+fn working_directory_priority() -> anyhow::Result<()> {
+    support::dump_err(|| {
+        let mut daemon_proc = support::daemon::Proc::new("working_directory.toml", DaemonArgs::default())
+            .context("starting daemon proc")?;
+
+        // Create test directories
+        let config_dir = "/tmp/test-working-dir";  // From config file
+        let cli_dir = "/tmp/cli-priority-dir";     // From CLI param
+        std::fs::create_dir_all(config_dir)?;
+        std::fs::create_dir_all(cli_dir)?;
+
+        let waiter = daemon_proc.events.take().unwrap().waiter(["daemon-bidi-stream-enter"]);
+        let mut attach_proc = daemon_proc.attach(
+            "test_priority", 
+            AttachArgs {
+                dir: Some(cli_dir.to_string()),  // CLI should override config
+                ..Default::default()
+            }
+        ).context("starting attach proc")?;
+
+        daemon_proc.events = Some(waiter.wait_final_event("daemon-bidi-stream-enter")?);
+
+        let mut lm = attach_proc.line_matcher()?;
+        attach_proc.run_cmd("pwd")?;
+        // Should be in CLI directory, not config directory
+        lm.scan_until_re(&format!("{}$", regex::escape(cli_dir)))?;
+
+        // Clean up
+        std::fs::remove_dir_all(config_dir).ok();
+        std::fs::remove_dir_all(cli_dir).ok();
+
+        Ok(())
+    })
+}
+
+#[test]
+#[timeout(30000)]
+fn command_alias_attach() -> anyhow::Result<()> {
+    support::dump_err(|| {
+        let mut daemon_proc = support::daemon::Proc::new("aliases.toml", DaemonArgs::default())
+            .context("starting daemon proc")?;
+
+        // Test that "at" alias works as "attach"
+        let waiter = daemon_proc.events.take().unwrap().waiter(["daemon-bidi-stream-enter"]);
+        
+        let out = Command::new(support::shpool_bin()?)
+            .arg("--config-file")
+            .arg(support::testdata_file("aliases.toml"))
+            .arg("--socket")
+            .arg(&daemon_proc.socket_path)
+            .arg("--no-daemonize")
+            .arg("at")  // This is an alias for "attach"
+            .arg("alias-test")
+            .spawn();
+        
+        // Verify command launched successfully
+        assert!(out.is_ok());
+        let mut child = out?;
+        daemon_proc.events = Some(waiter.wait_final_event("daemon-bidi-stream-enter")?);
+        
+        // Give it time to establish session
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        child.kill()?;
+
+        Ok(())
+    })
+}
+
+#[test]
+#[timeout(30000)]
+fn command_alias_list() -> anyhow::Result<()> {
+    support::dump_err(|| {
+        let mut daemon_proc = support::daemon::Proc::new("aliases.toml", DaemonArgs::default())
+            .context("starting daemon proc")?;
+
+        // First create a session to list
+        let waiter = daemon_proc.events.take().unwrap().waiter(["daemon-bidi-stream-enter"]);
+        let _attach_proc = daemon_proc.attach("test-session", Default::default())
+            .context("starting attach proc")?;
+        daemon_proc.events = Some(waiter.wait_final_event("daemon-bidi-stream-enter")?);
+        
+        // Test that "ls" alias works as "list"
+        let out = Command::new(support::shpool_bin()?)
+            .arg("--config-file")
+            .arg(support::testdata_file("aliases.toml"))
+            .arg("--socket")
+            .arg(&daemon_proc.socket_path)
+            .arg("--no-daemonize")
+            .arg("ls")  // This is an alias for "list"
+            .output()
+            .context("running list alias")?;
+
+        assert!(out.status.success());
+        let stdout = String::from_utf8_lossy(&out.stdout[..]);
+        assert!(stdout.contains("test-session"));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[timeout(30000)]
+fn command_alias_detach() -> anyhow::Result<()> {
+    support::dump_err(|| {
+        let mut daemon_proc = support::daemon::Proc::new("aliases.toml", DaemonArgs::default())
+            .context("starting daemon proc")?;
+
+        // First create a session
+        let waiter = daemon_proc.events.take().unwrap().waiter(["daemon-bidi-stream-enter"]);
+        let _attach_proc = daemon_proc.attach("detach-test", Default::default())
+            .context("starting attach proc")?;
+        daemon_proc.events = Some(waiter.wait_final_event("daemon-bidi-stream-enter")?);
+        
+        // Test that "dt" alias works as "detach"
+        let out = Command::new(support::shpool_bin()?)
+            .arg("--config-file")
+            .arg(support::testdata_file("aliases.toml"))
+            .arg("--socket")
+            .arg(&daemon_proc.socket_path)
+            .arg("--no-daemonize")
+            .arg("dt")  // This is an alias for "detach"
+            .arg("detach-test")
+            .output()
+            .context("running detach alias")?;
+
+        assert!(out.status.success());
+        let stderr = String::from_utf8_lossy(&out.stderr[..]);
+        let stdout = String::from_utf8_lossy(&out.stdout[..]);
+        assert!(stderr.is_empty());
+        assert!(stdout.is_empty());
+
+        Ok(())
+    })
+}

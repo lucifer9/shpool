@@ -151,6 +151,16 @@ The command is broken up into a binary to invoke and a list of arguments to
 pass to the binary using the shell-words crate."
         )]
         cmd: Option<String>,
+        #[clap(
+            short = 'd',
+            long = "dir",
+            long_help = "The working directory to start the new shell session in
+
+This option only applies when first creating a session, it is ignored on
+reattach. If not specified, the session will start in the current working
+directory of this command (or the directory specified in the config file)."
+        )]
+        dir: Option<String>,
         #[clap(help = "The name of the shell session to create or attach to")]
         name: String,
     },
@@ -340,7 +350,7 @@ pub fn run(args: Args, hooks: Option<Box<dyn hooks::Hooks + Send + Sync>>) -> an
 
     #[cfg(feature = "test_hooks")]
     if let Ok(test_hook_sock) = std::env::var("SHPOOL_TEST_HOOK_SOCKET_PATH") {
-        log::info!("spawning test hook sock at {}", test_hook_sock);
+        log::info!("spawning test hook sock at {test_hook_sock}");
         test_hooks::TEST_HOOK_SERVER.set_socket_path(test_hook_sock.clone());
         std::thread::spawn(|| {
             test_hooks::TEST_HOOK_SERVER.start();
@@ -358,8 +368,8 @@ pub fn run(args: Args, hooks: Option<Box<dyn hooks::Hooks + Send + Sync>>) -> an
             log_level_handle,
             socket,
         ),
-        Commands::Attach { force, ttl, cmd, name } => {
-            attach::run(config_manager, name, force, ttl, cmd, socket)
+        Commands::Attach { force, ttl, cmd, dir, name } => {
+            attach::run(config_manager, name, force, ttl, cmd, dir, socket)
         }
         Commands::Detach { sessions } => detach::run(sessions, socket),
         Commands::Kill { sessions } => kill::run(sessions, socket),
