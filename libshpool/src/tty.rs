@@ -131,10 +131,9 @@ pub struct AttachFlagsGuard<'fd> {
 
 impl std::ops::Drop for AttachFlagsGuard<'_> {
     fn drop(&mut self) {
-        if let Some(old) = &self.old {
-            if let Err(e) = termios::tcsetattr(self.fd, SetArg::TCSANOW, old) {
+        if let Some(old) = &self.old
+            && let Err(e) = termios::tcsetattr(self.fd, SetArg::TCSANOW, old) {
                 error!("error restoring terminal settings: {:?}", e);
             }
-        }
     }
 }

@@ -57,13 +57,18 @@ fn resolve_working_directory(
     Ok(PathBuf::from(user_info.home_dir))
 }
 
+pub struct AttachOptions {
+    pub name: String,
+    pub force: bool,
+    pub ttl: Option<String>,
+    pub cmd: Option<String>,
+    pub dir: Option<String>,
+    pub restore: Option<String>,
+}
+
 pub fn run(
     config_manager: config::Manager,
-    name: String,
-    force: bool,
-    ttl: Option<String>,
-    cmd: Option<String>,
-    dir: Option<String>,
+    options: AttachOptions,
     socket: PathBuf,
 ) -> anyhow::Result<()> {
     info!("\n\n======================== STARTING ATTACH ============================\n\n");
@@ -75,18 +80,18 @@ pub fn run(
         std::process::exit(1);
     }
 
-    if name.is_empty() {
+    if options.name.is_empty() {
         eprintln!("blank session names are not allowed");
         return Ok(());
     }
-    if name.contains(char::is_whitespace) {
+    if options.name.contains(char::is_whitespace) {
         eprintln!("whitespace is not allowed in session names");
         return Ok(());
     }
 
-    SignalHandler::new(name.clone(), socket.clone()).spawn()?;
+    SignalHandler::new(options.name.clone(), socket.clone()).spawn()?;
 
-    let ttl = match &ttl {
+    let ttl = match &options.ttl {
         Some(src) => match duration::parse(src.as_str()) {
             Ok(d) => Some(d),
             Err(e) => {
@@ -98,10 +103,10 @@ pub fn run(
 
     let mut detached = false;
     let mut tries = 0;
-    while let Err(err) = do_attach(&config_manager, name.as_str(), &ttl, &cmd, &dir, &socket) {
+    while let Err(err) = do_attach(&config_manager, &options, &ttl, &socket) {
         match err.downcast() {
-            Ok(BusyError) if !force => {
-                eprintln!("session '{name}' already has a terminal attached");
+            Ok(BusyError) if !options.force => {
+                eprintln!("session '{}' already has a terminal attached", options.name);
                 return Ok(());
             }
             Ok(BusyError) => {
@@ -109,12 +114,12 @@ pub fn run(
                     let mut client = dial_client(&socket)?;
                     client
                         .write_connect_header(ConnectHeader::Detach(DetachRequest {
-                            sessions: vec![name.clone()],
+                            sessions: vec![options.name.clone()],
                         }))
                         .context("writing detach request header")?;
                     let detach_reply: DetachReply = client.read_reply().context("reading reply")?;
                     if !detach_reply.not_found_sessions.is_empty() {
-                        warn!("could not find session '{}' to detach it", name);
+                        warn!("could not find session '{}' to detach it", options.name);
                     }
 
                     detached = true;
@@ -122,7 +127,7 @@ pub fn run(
                 thread::sleep(time::Duration::from_millis(100));
 
                 if tries > MAX_FORCE_RETRIES {
-                    eprintln!("session '{name}' already has a terminal which remains attached even after attempting to detach it");
+                    eprintln!("session '{}' already has a terminal which remains attached even after attempting to detach it", options.name);
                     return Err(anyhow!("could not detach session, forced attach failed"));
                 }
                 tries += 1;
@@ -145,10 +150,8 @@ impl std::error::Error for BusyError {}
 
 fn do_attach(
     config: &config::Manager,
-    name: &str,
+    options: &AttachOptions,
     ttl: &Option<time::Duration>,
-    cmd: &Option<String>,
-    dir: &Option<String>,
     socket: &PathBuf,
 ) -> anyhow::Result<()> {
     let mut client = dial_client(socket)?;
@@ -172,12 +175,12 @@ fn do_attach(
     // Resolve the working directory based on priority
     let config_binding = config.get();
     let config_start_dir = config_binding.start_directory.as_deref();
-    let working_directory = resolve_working_directory(dir.as_deref(), config_start_dir)
+    let working_directory = resolve_working_directory(options.dir.as_deref(), config_start_dir)
         .context("resolving working directory")?;
 
     client
         .write_connect_header(ConnectHeader::Attach(AttachHeader {
-            name: String::from(name),
+            name: options.name.clone(),
             local_tty_size: tty_size,
             local_env: local_env_keys
                 .into_iter()
@@ -187,8 +190,9 @@ fn do_attach(
                 })
                 .collect::<Vec<_>>(),
             ttl_secs: ttl.map(|d| d.as_secs()),
-            cmd: cmd.clone(),
+            cmd: options.cmd.clone(),
             working_directory: Some(working_directory.to_string_lossy().to_string()),
+            restore_override: options.restore.clone(),
         }))
         .context("writing attach header")?;
 
@@ -209,16 +213,16 @@ fn do_attach(
                 for warning in warnings.into_iter() {
                     eprintln!("shpool: warn: {warning}");
                 }
-                info!("attached to an existing session: '{}'", name);
+                info!("attached to an existing session: '{}'", options.name);
             }
             Created { warnings } => {
                 for warning in warnings.into_iter() {
                     eprintln!("shpool: warn: {warning}");
                 }
-                info!("created a new session: '{}'", name);
+                info!("created a new session: '{}'", options.name);
             }
             UnexpectedError(err) => {
-                return Err(anyhow!("BUG: unexpected error attaching to '{}': {}", name, err));
+                return Err(anyhow!("BUG: unexpected error attaching to '{}': {}", options.name, err));
             }
         }
     }

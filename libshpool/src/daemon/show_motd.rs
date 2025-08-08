@@ -100,11 +100,10 @@ impl DailyMessenger {
         // to pass TERM along correctly).
         shell_env: &[(OsString, OsString)],
     ) -> anyhow::Result<Option<TtySize>> {
-        if let Some(debouncer) = &self.debouncer {
-            if !debouncer.should_fire()? {
+        if let Some(debouncer) = &self.debouncer
+            && !debouncer.should_fire()? {
                 return Ok(None);
             }
-        }
 
         let pager_bin = match self.config.get().motd.clone().unwrap_or_default() {
             config::MotdDisplayMode::Pager { bin, .. } => bin,

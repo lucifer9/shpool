@@ -184,10 +184,9 @@ where
     R: std::io::Read,
 {
     fn drop(&mut self) {
-        if !self.never_match_regex.is_empty() {
-            if let Err(e) = self.drain() {
+        if !self.never_match_regex.is_empty()
+            && let Err(e) = self.drain() {
                 panic!("assertion failure during drain: {e:?}");
             }
-        }
     }
 }

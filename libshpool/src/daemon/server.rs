@@ -54,7 +54,6 @@ use crate::{
 };
 
 const DEFAULT_INITIAL_SHELL_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
-const DEFAULT_OUTPUT_SPOOL_LINES: usize = 500;
 const DEFAULT_PROMPT_PREFIX: &str = "shpool:$SHPOOL_SESSION_NAME ";
 
 // Half a second should be more than enough time to handle any resize or
@@ -798,11 +797,10 @@ impl Server {
         info!("about to fork subshell noecho={}", noecho);
         let mut fork = shpool_pty::fork::Fork::from_ptmx().context("forking pty")?;
         if let Ok(slave) = fork.is_child() {
-            if noecho {
-                if let Some(fd) = slave.borrow_fd() {
+            if noecho
+                && let Some(fd) = slave.borrow_fd() {
                     tty::disable_echo(fd).context("disabling echo on pty")?;
                 }
-            }
             for fd in consts::STDERR_FD + 1..(nix::unistd::SysconfVar::OPEN_MAX as i32) {
                 let _ = nix::unistd::close(fd);
             }
@@ -910,20 +908,16 @@ impl Server {
             custom_cmd: header.cmd.is_some(),
         };
         let child_pid = session_inner.pty_master.child_pid().ok_or(anyhow!("no child pid"))?;
+        let restore_config = header.restore_override
+            .clone()
+            .or_else(|| self.config.get().session_restore.clone())
+            .unwrap_or_else(|| "5MB".to_string());
+        
         session_inner.shell_to_client_join_h =
             Some(session_inner.spawn_shell_to_client(shell::ReaderArgs {
                 conn_id,
                 tty_size: header.local_tty_size.clone(),
-                scrollback_lines: match (
-                    self.config.get().output_spool_lines,
-                    &self.config.get().session_restore_mode,
-                ) {
-                    (Some(l), _) => l,
-                    (None, Some(config::SessionRestoreMode::Lines(l))) => *l as usize,
-                    (None, _) => DEFAULT_OUTPUT_SPOOL_LINES,
-                },
-                session_restore_mode:
-                    self.config.get().session_restore_mode.clone().unwrap_or_default(),
+                session_restore_config: restore_config,
                 client_connection: client_connection_rx,
                 client_connection_ack: client_connection_ack_tx,
                 tty_size_change: tty_size_change_rx,

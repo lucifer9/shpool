@@ -175,8 +175,7 @@ pub enum ClientConnectionMsg {
 pub struct ReaderArgs {
     pub conn_id: usize,
     pub tty_size: TtySize,
-    pub scrollback_lines: usize,
-    pub session_restore_mode: config::SessionRestoreMode,
+    pub session_restore_config: String,
     pub client_connection: crossbeam_channel::Receiver<ClientConnectionMsg>,
     pub client_connection_ack: crossbeam_channel::Sender<ClientConnectionStatus>,
     pub tty_size_change: crossbeam_channel::Receiver<TtySize>,
@@ -212,17 +211,13 @@ impl SessionInner {
         let mut pty_master = self.pty_master.is_parent()?;
         let watchable_master = pty_master;
         let name = self.name.clone();
-        let config = self.config.clone();
-        let closure = move || {
+        let mut closure = move || {
             let _s = span!(Level::INFO, "shell->client", s = name, cid = args.conn_id).entered();
 
             let mut output_spool = session_restore::new(
-                config,
-                // TODO: #173 - fetch session restore mode from config dynamically
-                &args.session_restore_mode,
+                &args.session_restore_config,
                 &args.tty_size,
-                args.scrollback_lines,
-            );
+            )?;
             let mut buf: Vec<u8> = vec![0; consts::BUF_SIZE];
             let mut poll_fds = [poll::PollFd::new(
                 watchable_master.borrow_fd().ok_or(anyhow!("no master fd"))?,
@@ -383,8 +378,8 @@ impl SessionInner {
                 }
 
                 let mut executed_resize = false;
-                if let Some(resize_cmd) = resize_cmd.as_ref() {
-                    if resize_cmd.when.saturating_duration_since(time::Instant::now())
+                if let Some(resize_cmd) = resize_cmd.as_ref()
+                    && resize_cmd.when.saturating_duration_since(time::Instant::now())
                         == time::Duration::ZERO
                     {
                         let status = pty_master
@@ -400,13 +395,12 @@ impl SessionInner {
                             resize_cmd.size.rows, resize_cmd.size.cols
                         );
                     }
-                }
                 if executed_resize {
                     resize_cmd = None;
                 }
 
                 if do_reattach {
-                    info!("executing reattach protocol (mode={:?})", &args.session_restore_mode);
+                    info!("executing reattach protocol (config={})", &args.session_restore_config);
                     let restore_buf = output_spool.restore_buffer();
                     info!("restore buffer length: {} bytes", restore_buf.len());
                     if let (true, ClientConnectionMsg::New(conn)) =

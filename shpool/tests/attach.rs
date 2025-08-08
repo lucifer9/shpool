@@ -1967,3 +1967,46 @@ fn command_alias_detach() -> anyhow::Result<()> {
         Ok(())
     })
 }
+
+#[test]
+#[timeout(30000)]
+fn restore_override_test() -> anyhow::Result<()> {
+    support::dump_err(|| {
+        let mut daemon_proc =
+            support::daemon::Proc::new("restore_override_test.toml", DaemonArgs::default())
+                .context("starting daemon proc")?;
+        let bidi_done_w = daemon_proc.events.take().unwrap().waiter(["daemon-bidi-stream-done"]);
+
+        {
+            // First attachment with custom restore override
+            let mut attach_proc = daemon_proc.attach(
+                "restore_test",
+                AttachArgs { 
+                    restore: Some("512KB".to_string()),
+                    ..Default::default() 
+                }
+            ).context("starting attach proc with --restore")?;
+            let mut line_matcher = attach_proc.line_matcher()?;
+
+            attach_proc.run_cmd("echo restore-override-test")?;
+            line_matcher.scan_until_re("restore-override-test$")?;
+        }
+
+        // Wait until the daemon has noticed that the connection has dropped
+        daemon_proc.events = Some(bidi_done_w.wait_final_event("daemon-bidi-stream-done")?);
+
+        {
+            // Second attachment to verify session restore worked
+            let mut attach_proc = daemon_proc.attach(
+                "restore_test",
+                Default::default()
+            ).context("reattaching to session")?;
+            let mut line_matcher = attach_proc.line_matcher()?;
+
+            // Should restore the previous output
+            line_matcher.scan_until_re("restore-override-test$")?;
+        }
+
+        Ok(())
+    })
+}

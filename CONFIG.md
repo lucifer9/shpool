@@ -38,56 +38,54 @@ this allows you to write a custom prompt hook in your .rc files
 that examines the `$SHPOOL_SESSION_NAME` environment variable
 directly, or eschew a `shpool` prompt customization entirely.
 
-## Session Restore Mode
+## Session Restore
 
-`shpool` can do a few different things when you re-attach to an existing
-session. You can choose what you want it to do with the `session_restore_mode`
-configuration option.
+`shpool` preserves shell output that occurs while you're disconnected and can
+restore it when you reattach to a session. You can control this behavior using
+the `session_restore` configuration option, which specifies how much output to
+cache in memory.
 
-### `"screen"` (default) - restore a screenful of history
+### Default Behavior (5MB cache)
 
-The `"screen"` option causes `shpool` to re-draw sufficient output to fill the
-entire screen of the client terminal as well as using the SIGWINCH trick
-described in the `"simple"` section below. This will help restore
-context for interactive terminal sessions that are not full blown ncurses
-apps. `"screen"` is the default reattach behavior for `shpool`.
-You can choose this option explicitly by adding
+By default, `shpool` maintains a 5MB cache of terminal output per session.
+When you reconnect, it will restore the cached output to give you context
+about what happened while you were away. This works well for most use cases
+without consuming excessive memory.
 
-```
-session_restore_mode = "screen"
-```
+### Customizing Cache Size
 
-to your `~/.config/shpool/config.toml`.
+You can specify a custom cache size using memory units:
 
-### `"simple"` - only ask child processes to redraw
-
-The `"simple"` option avoids restoring any output. In this reconnect mode, `shpool` will
-issue some SIGWINCH signals to try to convince full screen ncurses apps
-such as vim or emacs to re-draw the screen, but will otherwise do nothing.
-Any shell output produced when there was no client connected to the session
-will be lost. You can choose this connection mode by adding
-
-```
-session_restore_mode = "simple"
+```toml
+session_restore = "10MB"  # 10 megabytes
+session_restore = "512KB" # 512 kilobytes  
+session_restore = "1GB"   # 1 gigabyte (for heavy logging)
 ```
 
-to your `~/.config/shpool/config.toml`.
+### Disabling Session Restore
 
-### `{ lines = n }` - restore the last n lines of history
+To disable output caching completely (SIGWINCH signals only):
 
-The lines option is much like the `"screen"` option, except that rather
-than just a screenful of text, it restores the last n lines of text
-from the terminal being re-attached to. This could be useful if you
-wish to have more context than a single screenful of text. Note that
-n cannot exceed the value of the `output_spool_lines` configuration
-option, but it defaults to the value of the lines option, so you likely
-won't need to change it.
-
-```
-session_restore_mode = { lines = n }
+```toml
+session_restore = "0"
 ```
 
-where n is a number to your `~/.config/shpool/config.toml`.
+This mode will only send SIGWINCH signals to help full-screen applications
+like vim or emacs redraw, but won't restore any shell output.
+
+### Per-Session Override
+
+You can override the configured cache size for individual sessions using
+the `--restore` command line parameter:
+
+```bash
+shpool attach --restore 1MB session_name    # Use 1MB for this session
+shpool attach --restore 0 session_name      # No caching for this session
+shpool attach session_name                   # Use default config
+```
+
+This is useful when you know a session will generate lots of output or when
+you want to minimize memory usage for specific sessions.
 
 ## Detach Keybinding
 

@@ -19,11 +19,10 @@ use std::env;
 use anyhow::anyhow;
 
 pub fn resolve_sessions(sessions: &mut Vec<String>, action: &str) -> anyhow::Result<()> {
-    if sessions.is_empty() {
-        if let Ok(current_session) = env::var("SHPOOL_SESSION_NAME") {
+    if sessions.is_empty()
+        && let Ok(current_session) = env::var("SHPOOL_SESSION_NAME") {
             sessions.push(current_session);
         }
-    }
 
     if sessions.is_empty() {
         eprintln!("no session to {action}");

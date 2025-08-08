@@ -1,7 +1,7 @@
 norc = true
 noecho = true
 shell = "/usr/bin/zsh"
-session_restore_mode = "simple"
+session_restore = "0"
 prompt_prefix="session_name=$SHPOOL_SESSION_NAME "
 
 [env]

@@ -301,8 +301,8 @@ impl Client {
                         ChunkKind::Data => {
                             stdout.write_all(chunk.buf).context("writing chunk to stdout")?;
 
-                            if let Err(e) = stdout.flush() {
-                                if e.kind() == std::io::ErrorKind::WouldBlock {
+                            if let Err(e) = stdout.flush()
+                                && e.kind() == std::io::ErrorKind::WouldBlock {
                                     // If the fd is busy, we are likely just getting
                                     // flooded with output and don't need to worry about
                                     // flushing every last byte. Flushing is really
@@ -310,7 +310,6 @@ impl Client {
                                     // see echoed bytes immediately.
                                     continue;
                                 }
-                            }
                             debug!("flushed stdout");
                         }
                         ChunkKind::ExitStatus => {

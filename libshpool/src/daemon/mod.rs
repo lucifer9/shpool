@@ -43,8 +43,8 @@ pub fn run(
     >,
     socket: PathBuf,
 ) -> anyhow::Result<()> {
-    if let Ok(daemonize) = env::var(consts::AUTODAEMONIZE_VAR) {
-        if daemonize == "true" {
+    if let Ok(daemonize) = env::var(consts::AUTODAEMONIZE_VAR)
+        && daemonize == "true" {
             // TODO: Audit that the environment access only happens in single-threaded code.
             unsafe { env::remove_var(consts::AUTODAEMONIZE_VAR) }; // avoid looping
 
@@ -53,7 +53,6 @@ pub fn run(
             info!("daemonizing with pid_file={:?}", pid_file);
             daemonize::Daemonize::new().pid_file(pid_file).start().context("daemonizing")?;
         }
-    }
 
     info!("\n\n======================== STARTING DAEMON ============================\n\n");
 

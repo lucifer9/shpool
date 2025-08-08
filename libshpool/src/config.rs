@@ -27,20 +27,14 @@ use anyhow::{Context as _, Result};
 use serde_derive::Deserialize;
 use tracing::{info, warn};
 
-use crate::{config_watcher::ConfigWatcher, daemon::keybindings, test_hooks, user};
+use crate::{daemon::keybindings, user};
 
-/// Exposes the shpool config file, watching for file updates
-/// so that the user does not need to restart the daemon when
-/// they edit their config.
-///
-/// Users should never cache the config value directly and always
-/// access the config through the manager. The config may change
-/// at any time, so any cached config value could become stale.
+/// Exposes the shpool config file.
+/// Configuration changes require daemon restart to take effect.
 #[derive(Clone)]
 pub struct Manager {
     /// The config value.
     config: Arc<RwLock<Config>>,
-    _watcher: Arc<ConfigWatcher>,
 }
 
 impl Manager {
@@ -73,31 +67,13 @@ impl Manager {
         };
 
         let config = Self::load(&config_files).context("loading initial config")?;
+        
+        // Check for deprecated configuration and exit if found
+        Self::check_deprecated_config(&config)?;
+        
         info!("starting with config: {:?}", config);
         let config = Arc::new(RwLock::new(config));
-
-        let watcher = {
-            let config = config.clone();
-            // create a owned version of config_files to move to the watcher thread.
-            let config_files: Vec<_> = config_files.iter().map(|f| f.to_path_buf()).collect();
-            ConfigWatcher::new(move || {
-                info!("reloading config");
-                let mut config = config.write().unwrap();
-                match Self::load(&config_files) {
-                    Ok(c) => {
-                        info!("new config: {:?}", c);
-                        *config = c;
-                    }
-                    Err(err) => warn!("error loading config file: {:?}", err),
-                }
-                test_hooks::emit("daemon-reload-config");
-            })
-            .context("building watcher")?
-        };
-        for path in config_files {
-            watcher.watch(path).context("registering config file for watching")?;
-        }
-        let manager = Manager { config, _watcher: Arc::new(watcher) };
+        let manager = Manager { config };
 
         Ok(manager)
     }
@@ -167,6 +143,56 @@ impl Manager {
             }
         }
     }
+    
+    /// Check for deprecated configuration options and exit if found
+    fn check_deprecated_config(config: &Config) -> Result<()> {
+        let mut warnings: Vec<(String, String)> = Vec::new();
+        
+        if config.output_spool_lines.is_some() {
+            warnings.push((
+                "'output_spool_lines' is deprecated".to_string(), 
+                "Use 'session_restore = \"2MB\"' instead".to_string()
+            ));
+        }
+        
+        if config.vt100_output_spool_width.is_some() {
+            warnings.push((
+                "'vt100_output_spool_width' is deprecated".to_string(),
+                "This setting is no longer needed".to_string()
+            ));
+        }
+        
+        if let Some(mode) = &config.session_restore_mode {
+            match mode {
+                SessionRestoreMode::Simple => warnings.push((
+                    "'session_restore_mode = \"simple\"' is deprecated".to_string(),
+                    "Use 'session_restore = \"0\"' instead".to_string()
+                )),
+                SessionRestoreMode::Screen => warnings.push((
+                    "'session_restore_mode = \"screen\"' is deprecated".to_string(),
+                    "Use 'session_restore = \"1MB\"' instead".to_string()
+                )),
+                SessionRestoreMode::Lines(n) => {
+                    let mb = std::cmp::max(1, (*n as usize * 200) / (1024 * 1024));
+                    let warning_msg = format!("'session_restore_mode = {{ lines = {} }}' is deprecated", n);
+                    let suggestion_msg = format!("Use 'session_restore = \"{}MB\"' instead", mb);
+                    warnings.push((warning_msg, suggestion_msg));
+                }
+            }
+        }
+        
+        if !warnings.is_empty() {
+            eprintln!("Configuration Migration Required:");
+            for (warning, suggestion) in warnings {
+                eprintln!("  Warning: {}", warning);
+                eprintln!("  Suggestion: {}", suggestion);
+            }
+            eprintln!("\nPlease update your ~/.config/shpool/config.toml and restart shpool.");
+            std::process::exit(1);
+        }
+        
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for Manager {
@@ -178,7 +204,7 @@ impl std::fmt::Debug for Manager {
     }
 }
 
-#[derive(Deserialize, Default, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Config {
     /// norc makes it so that new shells do not load rc files
     /// when they spawn. Only works with bash.
@@ -238,22 +264,14 @@ pub struct Config {
     /// do set it.
     pub initial_path: Option<String>,
 
-    /// Indicates what shpool should do when it reattaches to an
-    /// existing session.
+    /// Controls how much terminal output shpool keeps in memory for session restoration.
+    /// Accepts memory sizes like "5MB", "1GB", "512KB", or "0" for no caching (SIGWINCH only).
+    /// Default: "5MB"
+    pub session_restore: Option<String>,
+    
+    // Deprecated fields - kept for migration detection only, will cause program to exit with error
     pub session_restore_mode: Option<SessionRestoreMode>,
-
-    /// The number of lines worth of output to keep in the output
-    /// spool which is maintained along side a shell session.
-    /// By default, 10000 lines.
     pub output_spool_lines: Option<usize>,
-
-    /// The width to use when storing session restoration lines via
-    /// the vt100 in-memory terminal engine (for the moment, the only
-    /// supported engine). vt100 allocates memory for the full width
-    /// for each line, leading to a lot of memory overhead, so playing
-    /// with this setting can be useful for tuning shpool's memory
-    /// usage. Eventually, this option will be deprecated once
-    /// the vt100 engine has been replaced.
     pub vt100_output_spool_width: Option<u16>,
 
     /// The user supplied keybindings.
@@ -322,17 +340,48 @@ impl Config {
             env: self.env.or(another.env),
             forward_env: self.forward_env.or(another.forward_env),
             initial_path: self.initial_path.or(another.initial_path),
+            session_restore: self.session_restore.or(another.session_restore),
+            
+            // Deprecated fields
             session_restore_mode: self.session_restore_mode.or(another.session_restore_mode),
             output_spool_lines: self.output_spool_lines.or(another.output_spool_lines),
-            vt100_output_spool_width: self
-                .vt100_output_spool_width
-                .or(another.vt100_output_spool_width),
+            vt100_output_spool_width: self.vt100_output_spool_width.or(another.vt100_output_spool_width),
             keybinding: self.keybinding.or(another.keybinding),
             prompt_prefix: self.prompt_prefix.or(another.prompt_prefix),
             motd: self.motd.or(another.motd),
             motd_args: self.motd_args.or(another.motd_args),
             aliases: self.aliases.or(another.aliases),
             start_directory: self.start_directory.or(another.start_directory),
+        }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            norc: None,
+            noecho: None,
+            nosymlink_ssh_auth_sock: None,
+            noread_etc_environment: None,
+            nodaemonize: None,
+            nodaemonize_timeout: None,
+            shell: None,
+            env: None,
+            forward_env: None,
+            initial_path: None,
+            session_restore: Some("5MB".to_string()),  // Default value
+            
+            // Deprecated fields - always None in default
+            session_restore_mode: None,
+            output_spool_lines: None,
+            vt100_output_spool_width: None,
+            
+            keybinding: None,
+            prompt_prefix: None,
+            motd: None,
+            motd_args: None,
+            aliases: None,
+            start_directory: None,
         }
     }
 }
@@ -407,6 +456,46 @@ pub enum MotdDisplayMode {
 mod test {
     use super::*;
     use ntest::timeout;
+    
+    /// Helper function for tests to get deprecated config warnings
+    fn get_deprecated_config_warnings(config: &Config) -> Vec<(String, String)> {
+        let mut warnings: Vec<(String, String)> = Vec::new();
+        
+        if config.output_spool_lines.is_some() {
+            warnings.push((
+                "'output_spool_lines' is deprecated".to_string(), 
+                "Use 'session_restore = \"2MB\"' instead".to_string()
+            ));
+        }
+        
+        if config.vt100_output_spool_width.is_some() {
+            warnings.push((
+                "'vt100_output_spool_width' is deprecated".to_string(), 
+                "Use 'session_restore = \"2MB\"' instead".to_string()
+            ));
+        }
+        
+        if let Some(mode) = &config.session_restore_mode {
+            match mode {
+                SessionRestoreMode::Simple => warnings.push((
+                    "'session_restore_mode = \"simple\"' is deprecated".to_string(),
+                    "Use 'session_restore = \"0\"' instead".to_string()
+                )),
+                SessionRestoreMode::Screen => warnings.push((
+                    "'session_restore_mode = \"screen\"' is deprecated".to_string(),
+                    "Use 'session_restore = \"1MB\"' instead".to_string()
+                )),
+                SessionRestoreMode::Lines(n) => {
+                    let mb = std::cmp::max(1, (*n as usize * 200) / (1024 * 1024));
+                    let warning_msg = format!("'session_restore_mode = {{ lines = {} }}' is deprecated", n);
+                    let suggestion_msg = format!("Use 'session_restore = \"{}MB\"' instead", mb);
+                    warnings.push((warning_msg, suggestion_msg));
+                }
+            }
+        }
+        
+        warnings
+    }
 
     #[test]
     #[timeout(30000)]
@@ -575,6 +664,83 @@ mod test {
         assert_eq!(aliases.get("ls"), Some(&"list".to_string()));
         assert_eq!(aliases.get("nonexistent"), None);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_deprecated_config_detection() -> Result<()> {
+        // Test deprecated session_restore_mode detection
+        let config_str = r#"
+            session_restore_mode = "simple"
+        "#;
+        let config: Config = toml::from_str(config_str)?;
+        let warnings = get_deprecated_config_warnings(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].0.contains("session_restore_mode"));
+        assert!(warnings[0].1.contains("session_restore = \"0\""));
+
+        // Test deprecated lines mode detection
+        let config_str = r#"
+            session_restore_mode = { lines = 42 }
+        "#;
+        let config: Config = toml::from_str(config_str)?;
+        let warnings = get_deprecated_config_warnings(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].0.contains("lines = 42"));
+        assert!(warnings[0].1.contains("MB"));
+
+        // Test deprecated screen mode detection
+        let config_str = r#"
+            session_restore_mode = "screen"
+        "#;
+        let config: Config = toml::from_str(config_str)?;
+        let warnings = get_deprecated_config_warnings(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].0.contains("screen"));
+        assert!(warnings[0].1.contains("1MB"));
+
+        // Test deprecated output_spool_lines detection
+        let config_str = r#"
+            output_spool_lines = 100
+        "#;
+        let config: Config = toml::from_str(config_str)?;
+        let warnings = get_deprecated_config_warnings(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].0.contains("output_spool_lines"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_new_session_restore_config() -> Result<()> {
+        // Test new session_restore parsing
+        let config_str = r#"
+            session_restore = "5MB"
+        "#;
+        let config: Config = toml::from_str(config_str)?;
+        assert_eq!(config.session_restore, Some("5MB".to_string()));
+        
+        // Should not generate warnings for new format
+        let warnings = get_deprecated_config_warnings(&config);
+        assert_eq!(warnings.len(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_migration_combinations() -> Result<()> {
+        // Test multiple deprecated options together
+        let config_str = r#"
+            session_restore_mode = "simple"
+            output_spool_lines = 100
+            vt100_output_spool_width = 120
+        "#;
+        let config: Config = toml::from_str(config_str)?;
+        let warnings = get_deprecated_config_warnings(&config);
+        
+        // Should detect all deprecated options
+        assert!(warnings.len() >= 2); // At least session_restore_mode and output_spool_lines
+        
         Ok(())
     }
 }

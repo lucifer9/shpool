@@ -12,31 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::VecDeque;
+
 use shpool_protocol::TtySize;
 use tracing::info;
+use anyhow::{anyhow, Result};
 
-use crate::config::{self, SessionRestoreMode};
 
-// To prevent data getting dropped, we set this to be large, but we don't want
-// to use u16::MAX, since the vt100 crate eagerly fills in its rows, and doing
-// so is very memory intensive. The right fix is to get the vt100 crate to
-// lazily initialize its rows, but that is likely a bunch of work.
-const VTERM_WIDTH: u16 = 1024;
-
-/// Some session shpool specific config getters
-trait ConfigExt {
-    /// Effective vterm width.
-    ///
-    /// See also `VTERM_WIDTH`.
-    fn vterm_width(&self) -> u16;
-}
-
-impl ConfigExt for config::Manager {
-    fn vterm_width(&self) -> u16 {
-        let config = self.get();
-        config.vt100_output_spool_width.unwrap_or(VTERM_WIDTH)
+/// Parse memory size string like "5MB", "1GB", "512KB" to bytes
+fn parse_memory_size(size_str: &str) -> Result<usize> {
+    if size_str == "0" {
+        return Ok(0);
+    }
+    
+    let size_str = size_str.trim().to_uppercase();
+    
+    if size_str.ends_with("KB") {
+        let num_str = &size_str[..size_str.len() - 2];
+        let num: usize = num_str.parse()?;
+        Ok(num * 1024)
+    } else if size_str.ends_with("MB") {
+        let num_str = &size_str[..size_str.len() - 2];
+        let num: usize = num_str.parse()?;
+        Ok(num * 1024 * 1024)
+    } else if size_str.ends_with("GB") {
+        let num_str = &size_str[..size_str.len() - 2];
+        let num: usize = num_str.parse()?;
+        Ok(num * 1024 * 1024 * 1024)
+    } else {
+        Err(anyhow!("Invalid memory size format: {}. Use formats like '5MB', '1GB', '512KB', or '0'", size_str))
     }
 }
+
 
 pub trait SessionSpool {
     /// Resizes the internal representation to new tty size.
@@ -58,9 +65,9 @@ pub trait SessionSpool {
     fn process(&mut self, bytes: &[u8]);
 }
 
-/// A spool that doesn't do anything.
-pub struct NullSpool;
-impl SessionSpool for NullSpool {
+/// A spool that only sends SIGWINCH signals, no caching.
+pub struct SignalOnlySpool;
+impl SessionSpool for SignalOnlySpool {
     fn resize(&mut self, _: TtySize) {}
 
     fn restore_buffer(&self) -> Vec<u8> {
@@ -70,23 +77,31 @@ impl SessionSpool for NullSpool {
     fn process(&mut self, _: &[u8]) {}
 }
 
-/// A spool that restores the last screenful of content using shpool_vt100.
-pub struct Vt100Screen {
-    parser: shpool_vt100::Parser,
-    /// Other options will be read dynamically from config.
-    config: config::Manager,
+/// A memory-based spool that keeps a fixed-size buffer of terminal output.
+pub struct MemorySpool {
+    buffer: VecDeque<u8>,
+    max_size: usize,
+    current_size: usize,
 }
 
-impl SessionSpool for Vt100Screen {
-    fn resize(&mut self, size: TtySize) {
-        self.parser.screen_mut().set_size(size.rows, self.config.vterm_width());
+impl MemorySpool {
+    fn new(max_size: usize) -> Self {
+        MemorySpool {
+            buffer: VecDeque::new(),
+            max_size,
+            current_size: 0,
+        }
+    }
+}
+
+impl SessionSpool for MemorySpool {
+    fn resize(&mut self, _size: TtySize) {
+        // Memory-based spool doesn't need to handle resize
     }
 
     fn restore_buffer(&self) -> Vec<u8> {
-        let (rows, cols) = self.parser.screen().size();
-        let restore_buf = self.parser.screen().contents_formatted();
-        info!("computing screen restore buf with (rows={}, cols={}, buf_len={})", 
-              rows, cols, restore_buf.len());
+        let restore_buf: Vec<u8> = self.buffer.iter().copied().collect();
+        info!("computing memory restore buf with {} bytes", restore_buf.len());
         if restore_buf.is_empty() {
             info!("restore buffer is empty - no content to restore");
         } else {
@@ -97,71 +112,125 @@ impl SessionSpool for Vt100Screen {
     }
 
     fn process(&mut self, bytes: &[u8]) {
-        if !bytes.is_empty() {
-            info!("Vt100Screen processing {} bytes: {:?}", 
-                  bytes.len(), 
-                  String::from_utf8_lossy(&bytes[..std::cmp::min(50, bytes.len())]));
+        if bytes.is_empty() {
+            return;
         }
-        self.parser.process(bytes)
+        
+        info!("MemorySpool processing {} bytes", bytes.len());
+        
+        // Add new bytes to the buffer
+        for &byte in bytes {
+            self.buffer.push_back(byte);
+            self.current_size += 1;
+        }
+        
+        // Trim buffer if it exceeds max size
+        while self.current_size > self.max_size && !self.buffer.is_empty() {
+            self.buffer.pop_front();
+            self.current_size -= 1;
+        }
     }
 }
 
-/// A spool that restores the last n lines of content using shpool_vt100.
-pub struct Vt100Lines {
-    parser: shpool_vt100::Parser,
-    /// How many lines to restore
-    nlines: u16,
-    /// Other options will be read dynamically from config.
-    config: config::Manager,
-}
 
-impl SessionSpool for Vt100Lines {
-    fn resize(&mut self, size: TtySize) {
-        self.parser.screen_mut().set_size(size.rows, self.config.vterm_width());
-    }
 
-    fn restore_buffer(&self) -> Vec<u8> {
-        let (rows, cols) = self.parser.screen().size();
-        let restore_buf = self.parser.screen().last_n_rows_contents_formatted(self.nlines);
-        info!("computing lines({}) restore buf with (rows={}, cols={}, buf_len={})", 
-              self.nlines, rows, cols, restore_buf.len());
-        if restore_buf.is_empty() {
-            info!("restore buffer is empty - no content to restore");
-        } else {
-            info!("restore buffer content preview: {:?}", 
-                  String::from_utf8_lossy(&restore_buf[..std::cmp::min(100, restore_buf.len())]));
-        }
-        restore_buf
-    }
-
-    fn process(&mut self, bytes: &[u8]) {
-        if !bytes.is_empty() {
-            info!("Vt100Lines processing {} bytes: {:?}", 
-                  bytes.len(), 
-                  String::from_utf8_lossy(&bytes[..std::cmp::min(50, bytes.len())]));
-        }
-        self.parser.process(bytes)
-    }
-}
-
-/// Creates a spool given a `mode`.
+/// Creates a spool given a memory size string like "5MB", "1MB", or "0".
 pub fn new(
-    config: config::Manager,
-    mode: &SessionRestoreMode,
-    size: &TtySize,
-    scrollback_lines: usize,
-) -> Box<dyn SessionSpool + 'static> {
-    let vterm_width = config.vterm_width();
-    match mode {
-        SessionRestoreMode::Simple => Box::new(NullSpool),
-        SessionRestoreMode::Screen => Box::new(Vt100Screen {
-            parser: shpool_vt100::Parser::new(size.rows, vterm_width, scrollback_lines),
-            config,
-        }),
-        SessionRestoreMode::Lines(nlines) => Box::new(Vt100Lines {
-            parser: shpool_vt100::Parser::new(size.rows, vterm_width, scrollback_lines),
-            nlines: *nlines,
-            config,
-        }),
+    restore_config: &str,
+    _size: &TtySize,
+) -> Result<Box<dyn SessionSpool + 'static>> {
+    match parse_memory_size(restore_config) {
+        Ok(0) => {
+            info!("Creating SignalOnlySpool (no caching, SIGWINCH only)");
+            Ok(Box::new(SignalOnlySpool))
+        },
+        Ok(max_size) => {
+            info!("Creating MemorySpool with {} bytes limit", max_size);
+            Ok(Box::new(MemorySpool::new(max_size)))
+        },
+        Err(e) => {
+            Err(anyhow!("Failed to parse session_restore config '{}': {}", restore_config, e))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_memory_size() {
+        // Test basic parsing
+        assert_eq!(parse_memory_size("0").unwrap(), 0);
+        assert_eq!(parse_memory_size("512KB").unwrap(), 512 * 1024);
+        assert_eq!(parse_memory_size("5MB").unwrap(), 5 * 1024 * 1024);
+        assert_eq!(parse_memory_size("2GB").unwrap(), 2 * 1024 * 1024 * 1024);
+
+        // Test case insensitivity
+        assert_eq!(parse_memory_size("1mb").unwrap(), 1024 * 1024);
+        assert_eq!(parse_memory_size("1Mb").unwrap(), 1024 * 1024);
+        assert_eq!(parse_memory_size("1kb").unwrap(), 1024);
+
+        // Test with whitespace
+        assert_eq!(parse_memory_size("  5MB  ").unwrap(), 5 * 1024 * 1024);
+
+        // Test error cases
+        assert!(parse_memory_size("invalid").is_err());
+        assert!(parse_memory_size("5TB").is_err());
+        assert!(parse_memory_size("5").is_err());
+        assert!(parse_memory_size("MB").is_err());
+        assert!(parse_memory_size("").is_err());
+    }
+
+    #[test]
+    fn test_new_session_spool() {
+        let tty_size = TtySize { rows: 24, cols: 80, xpixel: 0, ypixel: 0 };
+
+        // Test creating SignalOnlySpool
+        let spool = new("0", &tty_size).unwrap();
+        assert_eq!(spool.restore_buffer().len(), 0);
+
+        // Test creating MemorySpool
+        let spool = new("1MB", &tty_size).unwrap();
+        assert_eq!(spool.restore_buffer().len(), 0); // Initially empty
+
+        // Test error case
+        assert!(new("invalid", &tty_size).is_err());
+    }
+
+    #[test]
+    fn test_memory_spool_functionality() {
+        let mut spool = MemorySpool::new(100); // Small size for testing
+        
+        // Test initial state
+        assert_eq!(spool.restore_buffer().len(), 0);
+        
+        // Add some data
+        spool.process(b"hello");
+        let buffer = spool.restore_buffer();
+        assert_eq!(buffer, b"hello");
+        
+        // Add more data that exceeds capacity
+        let large_data = vec![b'x'; 200];
+        spool.process(&large_data);
+        let buffer = spool.restore_buffer();
+        
+        // Should be trimmed to max_size
+        assert!(buffer.len() <= 100);
+        assert!(!buffer.is_empty());
+    }
+
+    #[test]
+    fn test_signal_only_spool() {
+        let mut spool = SignalOnlySpool;
+        
+        // Should always return empty buffer
+        assert_eq!(spool.restore_buffer().len(), 0);
+        
+        spool.process(b"some data");
+        assert_eq!(spool.restore_buffer().len(), 0);
+        
+        spool.resize(TtySize { rows: 50, cols: 100, xpixel: 0, ypixel: 0 });
+        assert_eq!(spool.restore_buffer().len(), 0);
     }
 }

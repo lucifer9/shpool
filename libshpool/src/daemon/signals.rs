@@ -58,11 +58,10 @@ impl Handler {
                 assert!(TERM_SIGNALS.contains(&signal));
 
                 info!("term sig handler: cleaning up socket");
-                if let Some(sock) = self.sock {
-                    if let Err(e) = std::fs::remove_file(sock).context("cleaning up socket") {
+                if let Some(sock) = self.sock
+                    && let Err(e) = std::fs::remove_file(sock).context("cleaning up socket") {
                         error!("error cleaning up socket file: {}", e);
                     }
-                }
 
                 info!("term sig handler: exiting");
                 std::process::exit(0);

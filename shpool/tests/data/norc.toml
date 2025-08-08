@@ -1,7 +1,7 @@
 norc = true
 noecho = true
 shell = "/bin/bash"
-session_restore_mode = "simple"
+session_restore = "0"
 prompt_prefix = ""
 
 [env]

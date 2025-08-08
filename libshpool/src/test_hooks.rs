@@ -44,7 +44,7 @@ pub fn emit(_event: &str) {
 }
 
 #[cfg(feature = "test_hooks")]
-pub fn scoped(event: &str) -> ScopedEvent {
+pub fn scoped(event: &str) -> ScopedEvent<'_> {
     ScopedEvent::new(event)
 }
 

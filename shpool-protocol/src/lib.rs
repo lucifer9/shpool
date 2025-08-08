@@ -217,6 +217,10 @@ pub struct AttachHeader {
     /// If not specified, the daemon will use the user's home directory.
     #[serde(default)]
     pub working_directory: Option<String>,
+    /// If specified, overrides the configured session_restore value for this
+    /// specific attachment. Used for the --restore command line parameter.
+    #[serde(default)]
+    pub restore_override: Option<String>,
 }
 
 impl AttachHeader {

@@ -1,10 +1,8 @@
 norc = true
 noecho = true
 shell = "/bin/bash"
-session_restore = "0"
+session_restore = "1MB"
 prompt_prefix = ""
-
-forward_env = ["FOO", "BAR"]
 
 [env]
 PS1 = "prompt> "

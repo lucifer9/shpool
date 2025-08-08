@@ -30,7 +30,6 @@ use tracing_subscriber::{fmt::format::FmtSpan, prelude::*};
 mod attach;
 mod common;
 pub mod config;
-mod config_watcher;
 mod consts;
 mod daemon;
 mod daemonize;
@@ -161,6 +160,14 @@ reattach. If not specified, the session will start in the current working
 directory of this command (or the directory specified in the config file)."
         )]
         dir: Option<String>,
+        #[clap(
+            long = "restore",
+            help = "Override session restore cache size for this attachment",
+            long_help = "Override the configured session_restore value for this specific attachment.
+Useful when you know the session contains TUI applications that benefit from different caching.
+Examples: '0' (no cache, SIGWINCH only), '1MB', '10MB'"
+        )]
+        restore: Option<String>,
         #[clap(help = "The name of the shell session to create or attach to")]
         name: String,
     },
@@ -368,8 +375,10 @@ pub fn run(args: Args, hooks: Option<Box<dyn hooks::Hooks + Send + Sync>>) -> an
             log_level_handle,
             socket,
         ),
-        Commands::Attach { force, ttl, cmd, dir, name } => {
-            attach::run(config_manager, name, force, ttl, cmd, dir, socket)
+        Commands::Attach { force, ttl, cmd, dir, restore, name } => {
+            attach::run(config_manager, attach::AttachOptions {
+                name, force, ttl, cmd, dir, restore
+            }, socket)
         }
         Commands::Detach { sessions } => detach::run(sessions, socket),
         Commands::Kill { sessions } => kill::run(sessions, socket),

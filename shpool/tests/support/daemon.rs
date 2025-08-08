@@ -48,6 +48,7 @@ pub struct AttachArgs {
     pub ttl: Option<time::Duration>,
     pub cmd: Option<String>,
     pub dir: Option<String>,
+    pub restore: Option<String>,
 }
 
 pub struct HooksRecorder {
@@ -354,6 +355,10 @@ impl Proc {
         if let Some(dir_str) = &args.dir {
             cmd.arg("--dir");
             cmd.arg(dir_str);
+        }
+        if let Some(restore_str) = &args.restore {
+            cmd.arg("--restore");
+            cmd.arg(restore_str);
         }
         let proc = cmd.arg(name).spawn().context(format!("spawning attach proc for {name}"))?;
 
