@@ -1,4 +1,5 @@
 /target
+Cargo.lock
 
 debian/.debhelper
 debian/debhelper-build-stamp

@@ -318,6 +318,15 @@ impl Client {
                                 .read_i32::<LittleEndian>()
                                 .context("reading exit status from exit status chunk")?;
                             info!("got exit status frame (status={})", stat);
+
+                            // If detach, output a carriage return
+                            // and newline to the original terminal so the shell prompt starts on a new line
+                            {
+                                use std::io::Write;
+                                let _ = io::stdout().write_all(b"\r\n\n");
+                                let _ = io::stdout().flush();
+                            }
+
                             exit_status.store(stat, Ordering::Release);
                         }
                     }
